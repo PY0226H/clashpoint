@@ -12,7 +12,7 @@ from app.executors import (
 )
 from app.models import NpcDecisionContext
 
-from helpers import make_context, make_message, make_public_call, make_settings
+from helpers import make_context, make_message, make_public_call, make_room_config, make_settings
 
 
 class FakeProvider:
@@ -80,6 +80,39 @@ def test_router_uses_llm_executor_for_valid_structured_action() -> None:
     asyncio.run(scenario())
 
 
+def test_router_uses_llm_executor_for_valid_pause_suggestion() -> None:
+    async def scenario() -> None:
+        router = _make_router(
+            FakeProvider(
+                {
+                    "actionType": "pause_suggestion",
+                    "publicText": "我建议先短暂停一下，把争议焦点对齐后再继续。",
+                    "npcStatus": "speaking",
+                    "reasonCode": "llm_pause_review",
+                }
+            )
+        )
+
+        run = await router.decide(
+            make_context(
+                trigger_message=None,
+                public_call=make_public_call(call_type="pause_review"),
+                room_config=make_room_config(allow_public_call=True, allow_pause=True),
+            )
+        )
+
+        assert run.status == "created"
+        assert run.executor_kind == LLM_EXECUTOR_KIND
+        assert run.fallback_used is False
+        assert run.candidate is not None
+        assert run.candidate.action_type == "pause_suggestion"
+        assert run.candidate.reason_code == "llm_pause_review"
+        assert run.candidate.target_message_id is None
+        assert run.candidate.source_message_id is None
+
+    asyncio.run(scenario())
+
+
 def test_router_falls_back_to_rule_executor_when_llm_fails() -> None:
     async def scenario() -> None:
         router = _make_router(FakeProvider(RuntimeError("timeout")))
@@ -118,6 +151,36 @@ def test_router_falls_back_when_llm_output_violates_guard() -> None:
         assert run.fallback_reason == "official_verdict_field_forbidden"
         assert run.candidate is not None
         assert run.candidate.executor_kind == RULE_EXECUTOR_KIND
+        assert router.metrics_snapshot().llm_guard_rejected_total == 1
+
+    asyncio.run(scenario())
+
+
+def test_router_falls_back_when_llm_outputs_strong_pause_action() -> None:
+    async def scenario() -> None:
+        router = _make_router(
+            FakeProvider(
+                {
+                    "actionType": "hard_pause",
+                    "publicText": "我来暂停辩论。",
+                    "reasonCode": "heated_exchange",
+                }
+            )
+        )
+
+        run = await router.decide(
+            make_context(
+                trigger_message=None,
+                public_call=make_public_call(call_type="pause_review"),
+                room_config=make_room_config(allow_public_call=True, allow_pause=True),
+            )
+        )
+
+        assert run.status == "fallback"
+        assert run.fallback_reason == "strong_pause_action_forbidden"
+        assert run.candidate is not None
+        assert run.candidate.executor_kind == RULE_EXECUTOR_KIND
+        assert run.candidate.action_type == "pause_suggestion"
         assert router.metrics_snapshot().llm_guard_rejected_total == 1
 
     asyncio.run(scenario())
@@ -278,5 +341,53 @@ def test_rule_executor_can_answer_public_call_without_private_target() -> None:
         assert candidate.target_message_id is None
         assert candidate.source_message_id is None
         assert candidate.reason_code == "rule_public_call_response"
+
+    asyncio.run(scenario())
+
+
+def test_rule_executor_can_emit_pause_suggestion_for_pause_review() -> None:
+    async def scenario() -> None:
+        settings = make_settings()
+        rule = RuleExecutorV1(settings=settings)
+        context = make_context(
+            trigger_message=None,
+            public_call=make_public_call(call_type="pause_review"),
+            room_config=make_room_config(
+                allow_speak=False,
+                allow_praise=False,
+                allow_effect=False,
+                allow_public_call=True,
+                allow_pause=True,
+            ),
+        )
+
+        candidate = await rule.decide(context, fallback_reason="llm_not_configured")
+
+        assert candidate is not None
+        assert candidate.action_type == "pause_suggestion"
+        assert candidate.public_text == "我建议先短暂停一下，把当前争议焦点对齐后再继续。"
+        assert candidate.reason_code == "rule_public_call_pause_review"
+        assert candidate.target_message_id is None
+        assert candidate.source_message_id is None
+
+    asyncio.run(scenario())
+
+
+def test_rule_executor_downgrades_pause_review_when_pause_disabled() -> None:
+    async def scenario() -> None:
+        settings = make_settings()
+        rule = RuleExecutorV1(settings=settings)
+        context = make_context(
+            trigger_message=None,
+            public_call=make_public_call(call_type="pause_review"),
+            room_config=make_room_config(allow_public_call=True, allow_pause=False),
+        )
+
+        candidate = await rule.decide(context, fallback_reason="llm_not_configured")
+
+        assert candidate is not None
+        assert candidate.action_type == "speak"
+        assert candidate.reason_code == "rule_public_call_response"
+        assert "暂停" in (candidate.public_text or "")
 
     asyncio.run(scenario())

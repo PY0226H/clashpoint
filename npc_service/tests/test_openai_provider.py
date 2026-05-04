@@ -52,6 +52,10 @@ def test_openai_provider_posts_chat_completion_and_extracts_json_action() -> Non
         assert observed["url"] == "http://openai.test/v1/chat/completions"
         assert observed["authorization"] == "Bearer test-openai-key"
         assert observed["body"]["response_format"] == {"type": "json_object"}
+        system_prompt = observed["body"]["messages"][0]["content"]
+        assert "pause_suggestion" in system_prompt
+        assert "soft_pause" in system_prompt
+        assert "hard_pause" in system_prompt
         assert output["actionType"] == "praise"
         assert output["targetMessageId"] == 1001
         assert output["_openaiUsage"]["total_tokens"] == 22

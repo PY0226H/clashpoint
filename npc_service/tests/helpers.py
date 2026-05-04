@@ -128,6 +128,7 @@ def make_room_config(
     allow_praise: bool = True,
     allow_effect: bool = True,
     allow_public_call: bool = False,
+    allow_pause: bool = False,
 ) -> NpcRoomConfig:
     return NpcRoomConfig(
         sessionId=77,
@@ -142,7 +143,7 @@ def make_room_config(
         allowStateChange=True,
         allowWarning=True,
         allowPublicCall=allow_public_call,
-        allowPause=False,
+        allowPause=allow_pause,
         manualTakeoverByUserId=None,
         statusReason=None,
         updatedByUserId=None,
@@ -164,27 +165,27 @@ def make_trigger() -> DebateMessageCreatedTrigger:
     )
 
 
-def make_public_call() -> NpcPublicCallSnapshot:
+def make_public_call(*, call_type: str = "issue_summary") -> NpcPublicCallSnapshot:
     return NpcPublicCallSnapshot(
         publicCallId=3001,
         sessionId=77,
         userId=42,
         npcId="virtual_judge_default",
-        callType="issue_summary",
+        callType=call_type,
         content="帮忙总结一下当前争议焦点。",
         status="queued",
         createdAt="2026-05-03T00:00:02Z",
     )
 
 
-def make_public_call_trigger() -> DebateNpcPublicCallCreatedTrigger:
+def make_public_call_trigger(*, call_type: str = "issue_summary") -> DebateNpcPublicCallCreatedTrigger:
     return DebateNpcPublicCallCreatedTrigger(
         event="DebateNpcPublicCallCreated",
         sessionId=77,
         publicCallId=3001,
         userId=42,
         npcId="virtual_judge_default",
-        callType="issue_summary",
+        callType=call_type,
         content="帮忙总结一下当前争议焦点。",
         createdAt="2026-05-03T00:00:02Z",
         sourceEventId="evt-call-1",

@@ -8,7 +8,7 @@ from app.guard import (
     candidate_from_raw_output,
 )
 
-from helpers import make_context, make_settings
+from helpers import make_context, make_room_config, make_settings
 
 
 def test_guard_rejects_official_verdict_fields_at_any_depth() -> None:
@@ -89,3 +89,78 @@ def test_candidate_from_raw_output_builds_public_praise_candidate() -> None:
         "executorKind": "llm_executor_v1",
         "executorVersion": "llm_executor_v1",
     }
+
+
+def test_candidate_from_raw_output_builds_pause_suggestion_without_target() -> None:
+    candidate = candidate_from_raw_output(
+        {
+            "actionType": "pause_suggestion",
+            "publicText": "我建议先短暂停一下，把争议焦点对齐后再继续。",
+            "reasonCode": "heated_exchange",
+        },
+        context=make_context(room_config=make_room_config(allow_pause=True)),
+        settings=make_settings(),
+        executor_kind="llm_executor_v1",
+        executor_version="llm_executor_v1",
+    )
+
+    payload = candidate.model_dump(by_alias=True, exclude_none=True)
+
+    assert candidate.action_type == "pause_suggestion"
+    assert candidate.public_text == "我建议先短暂停一下，把争议焦点对齐后再继续。"
+    assert candidate.reason_code == "heated_exchange"
+    assert candidate.target_message_id is None
+    assert candidate.source_message_id == 1001
+    assert candidate.npc_status == "speaking"
+    assert "targetMessageId" not in payload
+    assert "effectKind" not in payload
+
+
+def test_candidate_from_raw_output_rejects_pause_suggestion_without_reason() -> None:
+    with pytest.raises(NpcGuardError) as err:
+        candidate_from_raw_output(
+            {
+                "actionType": "pause_suggestion",
+                "publicText": "建议先暂停一下。",
+            },
+            context=make_context(room_config=make_room_config(allow_pause=True)),
+            settings=make_settings(),
+            executor_kind="llm_executor_v1",
+            executor_version="llm_executor_v1",
+        )
+
+    assert err.value.reason_code == "pause_suggestion_reason_required"
+
+
+def test_candidate_from_raw_output_rejects_pause_suggestion_when_capability_disabled() -> None:
+    with pytest.raises(NpcGuardError) as err:
+        candidate_from_raw_output(
+            {
+                "actionType": "pause_suggestion",
+                "publicText": "建议先暂停一下。",
+                "reasonCode": "heated_exchange",
+            },
+            context=make_context(room_config=make_room_config(allow_pause=False)),
+            settings=make_settings(),
+            executor_kind="llm_executor_v1",
+            executor_version="llm_executor_v1",
+        )
+
+    assert err.value.reason_code == "pause_suggestion_disabled"
+
+
+def test_candidate_from_raw_output_rejects_strong_pause_action() -> None:
+    with pytest.raises(NpcGuardError) as err:
+        candidate_from_raw_output(
+            {
+                "actionType": "hard_pause",
+                "publicText": "暂停辩论。",
+                "reasonCode": "unsafe_rhythm",
+            },
+            context=make_context(room_config=make_room_config(allow_pause=True)),
+            settings=make_settings(),
+            executor_kind="llm_executor_v1",
+            executor_version="llm_executor_v1",
+        )
+
+    assert err.value.reason_code == "strong_pause_action_forbidden"

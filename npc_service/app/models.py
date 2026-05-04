@@ -6,7 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 DebateSide = Literal["pro", "con"]
-NpcActionType = Literal["speak", "praise", "effect", "state_changed"]
+NpcActionType = Literal["speak", "praise", "effect", "state_changed", "pause_suggestion"]
 NpcStatus = Literal["observing", "speaking", "praising", "silent", "manual_takeover", "unavailable"]
 NpcRoomStatus = Literal["active", "silent", "manual_takeover", "unavailable"]
 

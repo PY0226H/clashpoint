@@ -103,6 +103,8 @@ class RuleExecutorV1:
         if context.trigger_message is None and context.public_call is None:
             return None
         raw = self._rule_output(context, fallback_reason=fallback_reason)
+        if raw is None:
+            return None
         return candidate_from_raw_output(
             raw,
             context=context,
@@ -116,9 +118,25 @@ class RuleExecutorV1:
         context: NpcDecisionContext,
         *,
         fallback_reason: str | None,
-    ) -> Mapping[str, Any]:
+    ) -> Mapping[str, Any] | None:
         if context.public_call is not None:
             call_type = context.public_call.call_type
+            if call_type == "pause_review":
+                if context.room_config.allow_pause:
+                    return {
+                        "actionType": "pause_suggestion",
+                        "publicText": "我建议先短暂停一下，把当前争议焦点对齐后再继续。",
+                        "npcStatus": "speaking",
+                        "reasonCode": "rule_public_call_pause_review",
+                    }
+                if not context.room_config.allow_speak:
+                    return None
+                return {
+                    "actionType": "speak",
+                    "publicText": _public_call_reply(call_type),
+                    "npcStatus": "speaking",
+                    "reasonCode": "rule_public_call_response",
+                }
             if call_type == "atmosphere_effect":
                 return {
                     "actionType": "effect",
@@ -370,7 +388,7 @@ def _public_call_reply(call_type: str) -> str:
     if call_type == "issue_summary":
         return "我先把现场焦点收束一下：请双方继续围绕核心争议补证据、拆逻辑。"
     if call_type == "pause_review":
-        return "我收到暂停复核请求了。当前版本我会先公开提醒节奏，是否暂停仍以房间机制为准。"
+        return "我收到暂停复核请求了。当前我先公开提醒节奏，是否暂停仍以房间机制为准。"
     if call_type == "report_issue":
         return "我收到现场问题反馈了。请大家回到论题本身，避免人身攻击和跑题。"
     return "收到公开请求，我会继续观察现场节奏。"

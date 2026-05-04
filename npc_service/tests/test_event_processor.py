@@ -182,6 +182,66 @@ def test_event_processor_handles_public_call_with_public_call_context() -> None:
     asyncio.run(scenario())
 
 
+def test_event_processor_allows_pause_review_when_only_pause_capability_enabled() -> None:
+    async def scenario() -> None:
+        observed: dict[str, object] = {}
+        context = make_context(
+            trigger_message=None,
+            public_call=make_public_call(call_type="pause_review"),
+            room_config=make_room_config(
+                allow_speak=False,
+                allow_praise=False,
+                allow_effect=False,
+                allow_public_call=True,
+                allow_pause=True,
+            ),
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET":
+                return httpx.Response(200, json=context.model_dump(by_alias=True))
+            observed["candidate_payload"] = json.loads(request.content.decode("utf-8"))
+            return httpx.Response(
+                200,
+                json={
+                    "accepted": True,
+                    "actionId": 903,
+                    "actionUid": observed["candidate_payload"]["actionUid"],
+                    "status": "created",
+                    "reasonCode": None,
+                },
+            )
+
+        settings = make_settings()
+        router = FakeRouter(
+            raw_action={
+                "actionType": "pause_suggestion",
+                "publicText": "我建议先短暂停一下，把争议焦点对齐后再继续。",
+                "reasonCode": "llm_pause_review",
+            }
+        )
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            processor = NpcEventProcessor(
+                settings=settings,
+                router=router,
+                chat_client=NpcChatClient(settings=settings, client=client),
+            )
+
+            run = await processor.handle_debate_npc_public_call_created(
+                make_public_call_trigger(call_type="pause_review")
+            )
+
+        assert run.status == "submitted"
+        assert router.decision_count == 1
+        assert observed["candidate_payload"]["actionType"] == "pause_suggestion"
+        assert observed["candidate_payload"]["reasonCode"] == "llm_pause_review"
+        assert "targetMessageId" not in observed["candidate_payload"]
+        assert "sourceMessageId" not in observed["candidate_payload"]
+
+    asyncio.run(scenario())
+
+
 def test_event_processor_stays_silent_when_public_call_gate_disabled() -> None:
     async def scenario() -> None:
         post_count = 0

@@ -20,7 +20,20 @@ MAX_PUBLIC_TEXT_CHARS = 500
 MAX_EFFECT_KIND_CHARS = 48
 MAX_REASON_CODE_CHARS = 80
 
-ALLOWED_ACTION_TYPES: set[str] = {"speak", "praise", "effect", "state_changed"}
+ALLOWED_ACTION_TYPES: set[str] = {
+    "speak",
+    "praise",
+    "effect",
+    "state_changed",
+    "pause_suggestion",
+}
+FORBIDDEN_STRONG_PAUSE_ACTION_TYPES: set[str] = {
+    "soft_pause",
+    "hard_pause",
+    "resume",
+    "pause_debate",
+    "resume_debate",
+}
 ALLOWED_NPC_STATUSES: set[str] = {
     "observing",
     "speaking",
@@ -118,7 +131,11 @@ def candidate_from_raw_output(
         raise NpcNoAction()
     action_type = _coerce_action_type(_get(raw, "actionType", "action_type", "type"))
     public_text = _normalize_public_text(_get(raw, "publicText", "public_text", "text"))
-    target_message = _resolve_target_message(raw, context)
+    if action_type == "pause_suggestion":
+        _reject_pause_suggestion_target(raw)
+        target_message = None
+    else:
+        target_message = _resolve_target_message(raw, context)
     effect_kind = _normalize_optional_token(
         _get(raw, "effectKind", "effect_kind"),
         max_chars=MAX_EFFECT_KIND_CHARS,
@@ -140,6 +157,8 @@ def candidate_from_raw_output(
         public_text=public_text,
         target_message=target_message,
         effect_kind=effect_kind,
+        reason_code=reason_code,
+        context=context,
     )
     try:
         return NpcActionCandidate(
@@ -189,6 +208,11 @@ def _is_no_action(raw: Mapping[str, Any]) -> bool:
 
 def _coerce_action_type(value: object) -> NpcActionType:
     token = str(value or "").strip().lower()
+    if token in FORBIDDEN_STRONG_PAUSE_ACTION_TYPES:
+        raise NpcGuardError(
+            "strong_pause_action_forbidden",
+            f"strong pause action is forbidden: {value!r}",
+        )
     if token not in ALLOWED_ACTION_TYPES:
         raise NpcGuardError("action_type_invalid", f"invalid actionType: {value!r}")
     return cast(NpcActionType, token)
@@ -199,6 +223,8 @@ def _coerce_npc_status(value: object, *, action_type: str) -> NpcStatus:
     if token in ALLOWED_NPC_STATUSES:
         return cast(NpcStatus, token)
     if action_type == "speak":
+        return "speaking"
+    if action_type == "pause_suggestion":
         return "speaking"
     if action_type == "praise":
         return "praising"
@@ -251,6 +277,23 @@ def _resolve_target_message(
     raise NpcGuardError("target_message_not_in_context", "target message not found in context")
 
 
+def _reject_pause_suggestion_target(raw: Mapping[str, Any]) -> None:
+    for key in (
+        "targetMessageId",
+        "target_message_id",
+        "targetUserId",
+        "target_user_id",
+        "targetSide",
+        "target_side",
+    ):
+        value = _get(raw, key)
+        if value is not None and str(value).strip():
+            raise NpcGuardError(
+                "pause_suggestion_target_forbidden",
+                "pause_suggestion must not target a private message or user",
+            )
+
+
 def _coerce_int(value: object) -> int | None:
     if value is None or isinstance(value, bool):
         return None
@@ -271,10 +314,28 @@ def _validate_action_semantics(
     public_text: str | None,
     target_message: DebateMessageSnapshot | None,
     effect_kind: str | None,
+    reason_code: str | None,
+    context: NpcDecisionContext,
 ) -> None:
-    if action_type in {"speak", "praise"} and public_text is None:
+    if action_type in {"speak", "praise", "pause_suggestion"} and public_text is None:
         raise NpcGuardError("public_text_required", f"{action_type} requires publicText")
     if action_type == "praise" and target_message is None:
         raise NpcGuardError("praise_target_required", "praise requires target message")
     if action_type == "effect" and effect_kind is None:
         raise NpcGuardError("effect_kind_required", "effect requires effectKind")
+    if action_type == "pause_suggestion":
+        if not context.room_config.allow_pause:
+            raise NpcGuardError(
+                "pause_suggestion_disabled",
+                "pause_suggestion requires allowPause=true",
+            )
+        if reason_code is None:
+            raise NpcGuardError(
+                "pause_suggestion_reason_required",
+                "pause_suggestion requires reasonCode",
+            )
+        if effect_kind is not None:
+            raise NpcGuardError(
+                "pause_suggestion_effect_forbidden",
+                "pause_suggestion must not trigger effects",
+            )

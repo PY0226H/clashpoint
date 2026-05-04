@@ -116,7 +116,12 @@ def _control_plane_silent_decision(context: NpcDecisionContext) -> NpcDecisionRu
         reason = f"npc_status_{config.status}"
     elif context.public_call is not None and not config.allow_public_call:
         reason = "npc_public_call_disabled"
-    elif not (config.allow_speak or config.allow_praise or config.allow_effect):
+    elif not (
+        config.allow_speak
+        or config.allow_praise
+        or config.allow_effect
+        or config.allow_pause
+    ):
         reason = "npc_public_capabilities_disabled"
     if reason is None:
         return None
