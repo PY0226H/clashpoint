@@ -1568,6 +1568,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn debate_room_ws_handler_should_replay_pause_suggestion_to_readonly_spectator(
+    ) -> Result<()> {
+        let state = test_state();
+        let ek = EncodingKey::load(include_str!("../../chat_core/fixtures/encoding.pem"))?;
+        let spectator = chat_core::User::new(3, "Spectator", "spectator@acme.org");
+        let notify_ticket = ek.sign_notify_ticket(spectator, 300)?;
+        state.mark_debate_room_read_access(3, 12);
+
+        let action = DebateNpcActionCreated {
+            action_id: 302,
+            action_uid: "npc-action-spectator-pause-302".to_string(),
+            session_id: 12,
+            npc_id: "virtual_judge_default".to_string(),
+            display_name: "虚拟裁判".to_string(),
+            action_type: "pause_suggestion".to_string(),
+            public_text: Some("我建议先短暂停一下，把争议焦点对齐后再继续。".to_string()),
+            target_message_id: None,
+            target_user_id: None,
+            target_side: None,
+            effect_kind: None,
+            npc_status: Some("speaking".to_string()),
+            reason_code: Some("heated_exchange".to_string()),
+            created_at: Utc::now(),
+        };
+        let _ = state.build_user_event_for_debate_viewer(
+            3,
+            Arc::new(AppEvent::DebateNpcActionCreated(action)),
+            None,
+        );
+
+        let app = Router::new()
+            .route("/ws/debate/:session_id", get(debate_room_ws_handler))
+            .layer(from_fn_with_state(state.clone(), verify_notify_ticket))
+            .with_state(state);
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let (mut socket,) =
+            connect_debate_ws(addr, 12, &notify_ticket, Some("lastAckSeq=0")).await?;
+        let welcome = tokio::time::timeout(Duration::from_secs(2), socket.next()).await?;
+        let welcome_text = welcome
+            .expect("should receive welcome message")
+            .expect("welcome message should be ws ok")
+            .into_text()?
+            .to_string();
+        let welcome_json: serde_json::Value = serde_json::from_str(&welcome_text)?;
+        assert_eq!(welcome_json["type"], "welcome");
+        let replay_count = welcome_json
+            .get("replayCount")
+            .or_else(|| welcome_json.get("replay_count"))
+            .and_then(|v| v.as_u64())
+            .expect("welcome should carry replayCount");
+        assert_eq!(replay_count, 1);
+
+        let replay_msg = tokio::time::timeout(Duration::from_secs(2), socket.next()).await?;
+        let replay_text = replay_msg
+            .expect("spectator should receive replayed npc action")
+            .expect("npc replay should be ws ok")
+            .into_text()?
+            .to_string();
+        let replay_json: serde_json::Value = serde_json::from_str(&replay_text)?;
+        assert_eq!(replay_json["type"], "roomEvent");
+        assert_eq!(replay_json["payload"]["actionType"], "pause_suggestion");
+        assert_eq!(
+            replay_json["payload"]["actionUid"],
+            "npc-action-spectator-pause-302"
+        );
+        assert!(replay_json["payload"]["targetMessageId"].is_null());
+        assert!(replay_json["payload"].get("winner").is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn debate_room_ws_handler_should_reply_app_ping_with_pong() -> Result<()> {
         let state = test_state();
         let ek = EncodingKey::load(include_str!("../../chat_core/fixtures/encoding.pem"))?;

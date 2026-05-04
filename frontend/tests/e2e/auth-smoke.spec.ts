@@ -37,6 +37,7 @@ async function installAuthMocks(page: Page) {
     }>
   >();
   const messageSessionById = new Map<number, number>();
+  const joinedSessions = new Set<number>();
   const npcActionsBySession = new Map<
     number,
     Array<{
@@ -984,12 +985,12 @@ async function installAuthMocks(page: Page) {
       });
     }
 
-    if (
-      pathname.match(/^\/api\/debate\/sessions\/\d+\/join$/) &&
-      request.method() === "POST"
-    ) {
+    const joinMatch = pathname.match(/^\/api\/debate\/sessions\/(\d+)\/join$/);
+    if (joinMatch?.[1] && request.method() === "POST") {
+      const joinedSessionId = Number(joinMatch[1]);
+      joinedSessions.add(joinedSessionId);
       return json(route, 200, {
-        sessionId: 901,
+        sessionId: joinedSessionId,
         side: body?.side === "con" ? "con" : "pro",
         newlyJoined: true,
         proCount: body?.side === "con" ? 1 : 2,
@@ -1000,6 +1001,7 @@ async function installAuthMocks(page: Page) {
     const messageListSessionId = matchSessionPath(pathname, "messages");
     if (messageListSessionId && request.method() === "GET") {
       messageSessionById.set(2001, messageListSessionId);
+      const joined = joinedSessions.has(messageListSessionId);
       return json(route, 200, {
         items: [
           {
@@ -1014,6 +1016,9 @@ async function installAuthMocks(page: Page) {
         hasMore: false,
         nextCursor: null,
         revision: "2001",
+        viewerRole: joined ? "participant" : "spectator",
+        viewerSide: joined ? "pro" : null,
+        canSendMessage: joined,
       });
     }
 
@@ -1534,6 +1539,38 @@ test("@smoke room virtual judge npc should support history public call and feedb
   await page.getByRole("button", { name: "Call" }).click();
 
   await expect(page.getByText("NPC call queued: queued.")).toBeVisible();
+});
+
+test("@smoke spectator should replay virtual judge pause suggestion read-only", async ({
+  page,
+}) => {
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Sign In" }).click();
+
+  await expect(page).toHaveURL(/\/home$/);
+  await page.goto("/debate/sessions/901");
+
+  await expect(page.getByText("Spectator Mode")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Virtual Judge NPC" }),
+  ).toBeVisible();
+  await expect(page.getByText("Pause suggestion")).toBeVisible();
+  await expect(
+    page.getByText("I suggest a short pause review before the next exchange."),
+  ).toBeVisible();
+  await expect(page.getByText("Paused")).toHaveCount(0);
+  await expect(page.getByText("已暂停")).toHaveCount(0);
+  await expect(page.getByPlaceholder("Share your argument...")).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Send" })).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Pin 60s" }).first(),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Request AI Judge" }),
+  ).toBeDisabled();
+  await expect(
+    page.getByPlaceholder("Public calls are unavailable"),
+  ).toBeDisabled();
 });
 
 test("@smoke wallet page should render products ledger and probe", async ({

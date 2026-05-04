@@ -323,6 +323,14 @@ export function DebateRoomPage() {
   });
 
   useEffect(() => {
+    setMessages([]);
+    setHasMoreHistory(true);
+    setPageHint(null);
+    dispatchNpcState({ type: "reset" });
+    lastAckSeqRef.current = 0;
+  }, [sessionIdNum]);
+
+  useEffect(() => {
     if (!messagesQuery.data) {
       return;
     }
@@ -338,14 +346,6 @@ export function DebateRoomPage() {
     }
     dispatchNpcState({ type: "history", payload: npcActionsQuery.data.items });
   }, [npcActionsQuery.data]);
-
-  useEffect(() => {
-    setMessages([]);
-    setHasMoreHistory(true);
-    setPageHint(null);
-    dispatchNpcState({ type: "reset" });
-    lastAckSeqRef.current = 0;
-  }, [sessionIdNum]);
 
   useEffect(() => {
     if (!Number.isFinite(sessionIdNum) || sessionIdNum <= 0) {

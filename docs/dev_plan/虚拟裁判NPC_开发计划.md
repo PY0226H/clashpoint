@@ -1,7 +1,7 @@
 # 虚拟裁判 NPC 下一阶段开发计划
 
 更新时间：2026-05-04
-文档状态：active 开发计划，P2-H 已完成
+文档状态：active 开发计划，P3-I 已完成
 当前主线：`virtual-judge-npc-real-env-and-pause-suggestion`
 
 关联 PRD：[虚拟裁判NPC完整PRD.md](/Users/panyihang/Documents/EchoIsle/docs/PRD/虚拟裁判NPC完整PRD.md)
@@ -11,6 +11,7 @@
 关联真实环境 readiness：[虚拟裁判NPC_Beta真实环境Readiness输入清单.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_Beta真实环境Readiness输入清单.md)
 关联 dashboard 查询包：[虚拟裁判NPC_CanaryDashboard查询与告警基线.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_CanaryDashboard查询与告警基线.md)
 关联暂停建议合同：[虚拟裁判NPC_pause_suggestion合同冻结.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_pause_suggestion合同冻结.md)
+关联 smoke / guard 证据：[虚拟裁判NPC_pause_suggestion_Smoke与Guard证据.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_pause_suggestion_Smoke与Guard证据.md)
 上一阶段归档：[20260504T122329Z-virtual-judge-npc-beta-readiness-stage-closure.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/archive/虚拟裁判/20260504T122329Z-virtual-judge-npc-beta-readiness-stage-closure.md)
 完成快照：[completed.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/completed.md) B51
 后置待办：[todo.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/todo.md) C47
@@ -41,12 +42,12 @@
 
 | 领域 | 当前事实 | 下一阶段影响 |
 | --- | --- | --- |
-| action 类型 | `chat` 已接受 `speak/praise/effect/state_changed/pause_suggestion`，见 [npc.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/debate/npc.rs) 的 `normalize_action_type` | 下一阶段由 `npc_service` 生成合法 `pause_suggestion` 候选，`chat` 不把它映射为房间暂停态 |
+| action 类型 | `chat`、`npc_service`、前端 domain / realtime / app-shell 已接受 `pause_suggestion` | `chat` 不把它映射为房间暂停态；前端只展示建议卡片 |
 | pause 能力位 | `DebateNpcRoomConfig.allow_pause` 已映射到 `pause_suggestion` candidate，并接入 `pause_review` public call 门禁 | `allow_pause=true` 仅授权暂停建议，不授权 `soft_pause/hard_pause/resume` |
 | 公开呼叫 | `pause_review` 已是合法 public call type；`chat` 门禁允许只开启 `allow_pause` 的房间创建该公开呼叫 | 下一阶段让 `npc_service` 把 `pause_review` 与 `pause_suggestion` 最小闭环对齐 |
-| `npc_service` action schema | [models.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/models.py) 的 `NpcActionType` 已支持 `pause_suggestion` | 下一阶段重点同步前端 action union 和端到端 smoke |
-| 前端 action union | [debate-domain](/Users/panyihang/Documents/EchoIsle/frontend/packages/debate-domain/src/index.ts)、[realtime-sdk](/Users/panyihang/Documents/EchoIsle/frontend/packages/realtime-sdk/src/index.ts)、[DebateNpcModel.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/components/DebateNpcModel.ts) 仍只识别四类 action | 需要新增 suggestion 类型的文案、样式、replay hydration 与 smoke |
-| 实时与 replay | `DebateNpcActionCreated` 已有 replay key `npc_action:<action_uid>`，观战 WS 测试已覆盖 | `pause_suggestion` 默认复用现有 NPC action 事件，不新增房间状态事件 |
+| `npc_service` action schema | [models.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/models.py) 的 `NpcActionType` 已支持 `pause_suggestion` | LLM / rule / guard 已覆盖合法建议、强暂停隔离和 fallback |
+| 前端 action union | [debate-domain](/Users/panyihang/Documents/EchoIsle/frontend/packages/debate-domain/src/index.ts)、[realtime-sdk](/Users/panyihang/Documents/EchoIsle/frontend/packages/realtime-sdk/src/index.ts)、[DebateNpcModel.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/components/DebateNpcModel.ts) 已识别 `pause_suggestion` | 已补建议文案、样式、replay hydration、参赛者 smoke 和观战者 read-only smoke |
+| 实时与 replay | `DebateNpcActionCreated` 已有 replay key `npc_action:<action_uid>`，观战 WS 已覆盖 `pause_suggestion` replay | `pause_suggestion` 继续复用现有 NPC action 事件，不新增房间状态事件 |
 | 观测 | `npc_service` runtime metrics、`chat` candidate handler 日志、notify WS metrics 和 P3-I evidence 已存在 | 下一阶段重点补真实 dashboard 查询 / 告警演练，而不是再堆本地 mock 证据 |
 | 正式裁决隔离 | `chat` candidate guard 已拒绝官方裁决字段；PRD 明确 NPC 永不替代 AI 裁判团报告 | `pause_suggestion` 文案和 payload 也必须继续禁止胜负判断、评分、裁决字段 |
 
@@ -96,14 +97,13 @@
 | P2-F. `virtual-judge-npc-pause-suggestion-chat-spine` | `chat` 支持 `pause_suggestion` candidate、能力位、OpenAPI 和测试 | 已完成 | 已新增 DB check 迁移、chat guard、public call 门禁和 targeted tests；`allow_pause` 只控制建议，不允许强暂停 |
 | P2-G. `virtual-judge-npc-pause-suggestion-npc-service-executor` | `npc_service` LLM / rule / guard 支持生成暂停建议 | 已完成 | 已支持 LLM 合法建议、强暂停 guard 隔离、rule fallback 建议、`allow_pause=false` 降级和 targeted tests |
 | P2-H. `virtual-judge-npc-pause-suggestion-frontend-ux` | 前端展示暂停建议卡片、action feed、replay hydration 与反馈 | 已完成 | 已完成前端 union、parser、NPC feed / panel、replay hydration 测试和 targeted smoke |
-| P3-I. `virtual-judge-npc-pause-suggestion-smoke-and-guard` | 完成 pause suggestion 端到端 smoke、负向边界和正式裁决隔离验证 | 待执行 | 覆盖观战 replay、allow_pause=false、LLM 违规输出隔离 |
+| P3-I. `virtual-judge-npc-pause-suggestion-smoke-and-guard` | 完成 pause suggestion 端到端 smoke、负向边界和正式裁决隔离验证 | 已完成 | 已新增观战 replay 测试、前端观战只读 smoke 和 smoke / guard 证据文档 |
 | P4-J. `virtual-judge-npc-real-env-pause-stage-closure` | 阶段收口，回写 completed/todo 并归档计划 | 待执行 | 只在主体切片完成后执行 |
 
 ## 6. 下一开发模块建议
 
-1. 默认下一步执行 P3-I `virtual-judge-npc-pause-suggestion-smoke-and-guard`，补齐跨层 smoke、负向边界和正式裁决隔离验证。
-2. P3-I 完成后执行 P4-J `virtual-judge-npc-real-env-pause-stage-closure`。
-3. P1-D 必须等真实 Beta / staging 环境具备后再执行；没有环境时只允许产出 `env_blocked`，不得写成 pass。
+1. 默认下一步执行 P4-J `virtual-judge-npc-real-env-pause-stage-closure`，回写 completed/todo 并归档本阶段计划。
+2. P1-D 必须等真实 Beta / staging 环境具备后再执行；没有环境时只允许产出 `env_blocked`，不得写成 pass。
 
 ## 7. 模块详情
 
@@ -398,6 +398,14 @@
 4. NPC 不可用或被拒绝时不影响房间主链。
 5. 证据文档记录本地 smoke 和真实环境状态，不混淆 pass 口径。
 
+完成结果：
+
+1. 已新增 [虚拟裁判NPC_pause_suggestion_Smoke与Guard证据.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_pause_suggestion_Smoke与Guard证据.md)，记录仓内 pass 与真实环境 `env_blocked`。
+2. `notify_server` 新增观战者 replay `pause_suggestion` 测试，确认只读观战用户能收到 `DebateNpcActionCreated` replay，且 payload 不含正式裁决字段。
+3. `auth-smoke` 新增观战者直接进入房间的 read-only smoke，确认 NPC 建议卡片可见，发言、置顶、AI 裁判和公开呼叫均不可用。
+4. 前端房间页调整 session reset effect 顺序，避免直达房间时 NPC history 先 hydrate 后被 reset 清空。
+5. 已运行 chat、notify、npc_service、frontend targeted tests、完整 web smoke 和 `git diff --check`。
+
 ### P4-J. `virtual-judge-npc-real-env-pause-stage-closure`
 
 目标：
@@ -445,3 +453,4 @@
 - 2026-05-04：完成 P2-F `virtual-judge-npc-pause-suggestion-chat-spine`，`chat` 支持 `pause_suggestion` candidate、`allow_pause` 能力位、DB check 迁移和 targeted tests；下一步默认推进 P2-G。
 - 2026-05-04：完成 P2-G `virtual-judge-npc-pause-suggestion-npc-service-executor`，`npc_service` 支持 LLM / rule 生成暂停建议，并在 guard 层隔离强暂停动作；下一步默认推进 P2-H。
 - 2026-05-04：完成 P2-H `virtual-judge-npc-pause-suggestion-frontend-ux`，前端支持暂停建议卡片、replay hydration、反馈和 targeted smoke；下一步默认推进 P3-I。
+- 2026-05-04：完成 P3-I `virtual-judge-npc-pause-suggestion-smoke-and-guard`，仓内跨层 smoke / guard 通过并新增证据文档；下一步默认推进 P4-J。
