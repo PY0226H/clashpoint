@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.models import DebateMessageCreatedTrigger, DebateMessageSnapshot, NpcDecisionContext
-from app.settings import OpenAIProviderSettings, Settings
+from app.settings import EventConsumerSettings, OpenAIProviderSettings, Settings
 
 
 def make_settings(
@@ -10,6 +10,10 @@ def make_settings(
     llm_enabled: bool = True,
     rule_fallback_enabled: bool = True,
     event_submit_max_attempts: int = 2,
+    event_consumer_enabled: bool = False,
+    event_webhook_enabled: bool = True,
+    event_consumer_max_attempts: int = 3,
+    event_consumer_dlq_path: str = "npc_service_test_dlq.jsonl",
 ) -> Settings:
     return Settings(
         service_name="npc_service_test",
@@ -23,6 +27,19 @@ def make_settings(
         npc_policy_version="npc_policy_test",
         llm_enabled=llm_enabled,
         rule_fallback_enabled=rule_fallback_enabled,
+        event_consumer=EventConsumerSettings(
+            enabled=event_consumer_enabled,
+            webhook_enabled=event_webhook_enabled,
+            source="kafka",
+            brokers="127.0.0.1:9092",
+            topic_prefix="echoisle",
+            consume_topics=("debate.message.created.v1",),
+            group_id="npc-service-test",
+            client_id="npc-service-test",
+            max_attempts=event_consumer_max_attempts,
+            retry_backoff_ms=0,
+            dlq_path=event_consumer_dlq_path,
+        ),
         openai=OpenAIProviderSettings(
             api_key=api_key,
             model="test-model",

@@ -54,7 +54,27 @@ def test_healthz_reports_executor_and_fallback_state() -> None:
             "llmEnabled": True,
             "llmConfigured": False,
             "ruleFallbackEnabled": True,
+            "eventConsumerEnabled": False,
+            "eventConsumerSource": "kafka",
+            "eventWebhookEnabled": True,
         }
+
+    asyncio.run(scenario())
+
+
+def test_debate_message_event_route_can_be_disabled_for_non_local_consumer_path() -> None:
+    async def scenario() -> None:
+        app = create_app(settings=make_settings(event_webhook_enabled=False), router=FakeRouter())
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/api/internal/npc/events/debate-message-created",
+                headers={"x-ai-internal-key": "test-internal-key"},
+                json=make_trigger().model_dump(by_alias=True),
+            )
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "event webhook disabled"
 
     asyncio.run(scenario())
 

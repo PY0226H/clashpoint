@@ -31,6 +31,21 @@ class OpenAIProviderSettings:
 
 
 @dataclass(frozen=True)
+class EventConsumerSettings:
+    enabled: bool
+    webhook_enabled: bool
+    source: str
+    brokers: str
+    topic_prefix: str
+    consume_topics: tuple[str, ...]
+    group_id: str
+    client_id: str
+    max_attempts: int
+    retry_backoff_ms: int
+    dlq_path: str
+
+
+@dataclass(frozen=True)
 class Settings:
     service_name: str
     ai_internal_key: str
@@ -43,10 +58,34 @@ class Settings:
     npc_policy_version: str
     llm_enabled: bool
     rule_fallback_enabled: bool
+    event_consumer: EventConsumerSettings
     openai: OpenAIProviderSettings
 
 
+def parse_env_csv(value: str | None, *, default: tuple[str, ...]) -> tuple[str, ...]:
+    if value is None:
+        return default
+    items = tuple(item.strip() for item in value.split(",") if item.strip())
+    return items or default
+
+
 def load_settings() -> Settings:
+    event_consumer = EventConsumerSettings(
+        enabled=parse_env_bool(os.getenv("NPC_EVENT_CONSUMER_ENABLED"), default=False),
+        webhook_enabled=parse_env_bool(os.getenv("NPC_EVENT_WEBHOOK_ENABLED"), default=False),
+        source=os.getenv("NPC_EVENT_CONSUMER_SOURCE", "kafka"),
+        brokers=os.getenv("NPC_KAFKA_BROKERS", "127.0.0.1:9092"),
+        topic_prefix=os.getenv("NPC_KAFKA_TOPIC_PREFIX", "echoisle"),
+        consume_topics=parse_env_csv(
+            os.getenv("NPC_KAFKA_CONSUME_TOPICS"),
+            default=("debate.message.created.v1",),
+        ),
+        group_id=os.getenv("NPC_KAFKA_GROUP_ID", "npc-service"),
+        client_id=os.getenv("NPC_KAFKA_CLIENT_ID", "npc-service"),
+        max_attempts=max(1, int(os.getenv("NPC_EVENT_CONSUMER_MAX_ATTEMPTS", "3"))),
+        retry_backoff_ms=max(0, int(os.getenv("NPC_EVENT_CONSUMER_RETRY_BACKOFF_MS", "500"))),
+        dlq_path=os.getenv("NPC_EVENT_CONSUMER_DLQ_PATH", "npc_service_dlq.jsonl"),
+    )
     return Settings(
         service_name=os.getenv("NPC_SERVICE_NAME", "npc_service"),
         ai_internal_key=os.getenv("AI_JUDGE_INTERNAL_KEY", "dev-ai-internal-key"),
@@ -71,6 +110,7 @@ def load_settings() -> Settings:
             os.getenv("NPC_SERVICE_RULE_FALLBACK_ENABLED"),
             default=True,
         ),
+        event_consumer=event_consumer,
         openai=OpenAIProviderSettings(
             api_key=os.getenv("NPC_OPENAI_API_KEY", ""),
             model=os.getenv("NPC_OPENAI_MODEL", "gpt-4.1-mini"),

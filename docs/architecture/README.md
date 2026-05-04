@@ -1,7 +1,7 @@
 # EchoIsle Architecture Map
 
 更新时间：2026-05-03
-状态：当前主线轻量代码地图（AI Judge 当前有效主线为 Official Verdict Plane；虚拟裁判 NPC MVP 正在开发；NPC Coach / Room QA 已暂停）
+状态：当前主线轻量代码地图（AI Judge 当前有效主线为 Official Verdict Plane；虚拟裁判 NPC 下一阶段正在开发；NPC Coach / Room QA 已暂停）
 
 ---
 
@@ -82,7 +82,7 @@
 
 ### 3.2.1 虚拟裁判 NPC（公开房间娱乐角色）
 
-虚拟裁判 NPC 是房间内公开可见的娱乐导向角色，不是赛后官方 AI 裁判团，也不替代正式裁决报告。当前 P1-A / P1-B / P1-C 已落地 chat 侧 action spine、notify replay 合同与 Debate Room 前端展示壳；P2-D 已新增独立 `npc_service/` 服务骨架、LLM executor router、rule fallback 与本地 guard；P2-E 已新增本地 webhook 事件触发路径和 chat 公开 context 查询接口，后续 Kafka/event-bus consumer 接管后可移除 webhook。
+虚拟裁判 NPC 是房间内公开可见的娱乐导向角色，不是赛后官方 AI 裁判团，也不替代正式裁决报告。当前 MVP 已完成 chat 侧 action spine、notify replay 合同、Debate Room 前端展示壳、独立 `npc_service/`、LLM executor router、rule fallback、本地 guard 与 full smoke；下一阶段正在把 `DebateMessageCreated` 输入从本地 webhook 推进到 Kafka/event-bus consumer，webhook 默认仅作为 local-dev 入口。
 
 优先看：
 
@@ -98,11 +98,12 @@
 10. [npc_service executors.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/executors.py)
 11. [npc_service guard.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/guard.py)
 12. [npc_service event_processor.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/event_processor.py)
-13. [npc_service chat_client.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/chat_client.py)
-14. [DebateNpcPanel.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/components/DebateNpcPanel.tsx)
-15. [DebateNpcModel.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/components/DebateNpcModel.ts)
-16. [NPC action migration](/Users/panyihang/Documents/EchoIsle/chat/migrations/20260503090000_debate_npc_action_spine.sql)
-17. [虚拟裁判NPC_开发计划.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/虚拟裁判NPC_开发计划.md)
+13. [npc_service event_consumer.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/event_consumer.py)
+14. [npc_service chat_client.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/chat_client.py)
+15. [DebateNpcPanel.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/components/DebateNpcPanel.tsx)
+16. [DebateNpcModel.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/components/DebateNpcModel.ts)
+17. [NPC action migration](/Users/panyihang/Documents/EchoIsle/chat/migrations/20260503090000_debate_npc_action_spine.sql)
+18. [虚拟裁判NPC_开发计划.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/虚拟裁判NPC_开发计划.md)
 
 ### 3.3 AI 裁判 / 报告 / 申诉 / 平局投票
 
@@ -349,10 +350,13 @@ AI Judge real-env / runtime evidence 优先看：
    - 从 `chat` 拉取公开 context，并提交候选动作到 `chat` 内部 action sink；`chat` 仍是房间事实源
 
 5. [event_processor.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/event_processor.py)
-   - 处理 `DebateMessageCreated` trigger，串联 context fetch、executor router 与 candidate callback；当前 webhook 为本地 MVP 路径
+   - 处理 `DebateMessageCreated` trigger，串联 context fetch、executor router 与 candidate callback
 
-6. [tests](/Users/panyihang/Documents/EchoIsle/npc_service/tests)
-   - 当前覆盖 executor router、LLM fallback、guard、OpenAI adapter、chat client、event processor 与 FastAPI 路由
+6. [event_consumer.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/event_consumer.py)
+   - 解码 Kafka/event-bus envelope，驱动 `NpcEventProcessor`，维护 commit/retry/DLQ 语义；webhook 默认仅作为 local-dev 入口
+
+7. [tests](/Users/panyihang/Documents/EchoIsle/npc_service/tests)
+   - 当前覆盖 executor router、LLM fallback、guard、OpenAI adapter、chat client、event processor、event consumer 与 FastAPI 路由
 
 ### 5.3 最常用 AI 服务文件
 
