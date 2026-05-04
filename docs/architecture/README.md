@@ -38,7 +38,7 @@
 
 3. `npc_service/`
    - Python FastAPI 虚拟裁判 NPC 服务
-   - `llm_executor_v1` 主执行路径、`rule_executor_v1` fallback、OpenAI-compatible provider、候选动作 guard 与 chat 内部回调 client
+   - `llm_executor_v1` 主执行路径、`rule_executor_v1` fallback、OpenAI-compatible provider、候选动作 guard、LLM canary / 熔断 / 成本观测与 chat 内部回调 client
 
 4. `frontend/`
    - React + TypeScript + Tauri monorepo
@@ -82,7 +82,7 @@
 
 ### 3.2.1 虚拟裁判 NPC（公开房间娱乐角色）
 
-虚拟裁判 NPC 是房间内公开可见的娱乐导向角色，不是赛后官方 AI 裁判团，也不替代正式裁决报告。当前 MVP 已完成 chat 侧 action spine、notify replay 合同、Debate Room 前端展示壳、独立 `npc_service/`、LLM executor router、rule fallback、本地 guard 与 full smoke；下一阶段已完成 `npc_service` Kafka/event-bus consumer 切换、观战实时可见、Ops 控制面、公开呼叫、近期行为和私有反馈，webhook 默认仅作为 local-dev 入口。
+虚拟裁判 NPC 是房间内公开可见的娱乐导向角色，不是赛后官方 AI 裁判团，也不替代正式裁决报告。当前 MVP 已完成 chat 侧 action spine、notify replay 合同、Debate Room 前端展示壳、独立 `npc_service/`、LLM executor router、rule fallback、本地 guard 与 full smoke；下一阶段已完成 `npc_service` Kafka/event-bus consumer 切换、观战实时可见、Ops 控制面、公开呼叫、近期行为、私有反馈、LLM canary、成本 / 延迟指标和熔断，webhook 默认仅作为 local-dev 入口。
 
 优先看：
 
@@ -96,18 +96,19 @@
 8. [npc_service main.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/main.py)
 9. [npc_service app_factory.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/app_factory.py)
 10. [npc_service executors.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/executors.py)
-11. [npc_service guard.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/guard.py)
-12. [npc_service event_processor.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/event_processor.py)
-13. [npc_service event_consumer.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/event_consumer.py)
-14. [npc_service chat_client.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/chat_client.py)
-15. [DebateNpcPanel.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/components/DebateNpcPanel.tsx)
-16. [DebateNpcModel.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/components/DebateNpcModel.ts)
-17. [NPC action migration](/Users/panyihang/Documents/EchoIsle/chat/migrations/20260503090000_debate_npc_action_spine.sql)
-18. [NPC ops control migration](/Users/panyihang/Documents/EchoIsle/chat/migrations/20260504100000_debate_npc_ops_control_plane.sql)
-19. [NPC public interaction migration](/Users/panyihang/Documents/EchoIsle/chat/migrations/20260504110000_debate_npc_public_call_history_feedback.sql)
-20. [OpsConsolePage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/OpsConsolePage.tsx)
-21. [ops-domain index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/ops-domain/src/index.ts)
-22. [虚拟裁判NPC_开发计划.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/虚拟裁判NPC_开发计划.md)
+11. [npc_service llm_runtime.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/llm_runtime.py)
+12. [npc_service guard.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/guard.py)
+13. [npc_service event_processor.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/event_processor.py)
+14. [npc_service event_consumer.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/event_consumer.py)
+15. [npc_service chat_client.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/chat_client.py)
+16. [DebateNpcPanel.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/components/DebateNpcPanel.tsx)
+17. [DebateNpcModel.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/components/DebateNpcModel.ts)
+18. [NPC action migration](/Users/panyihang/Documents/EchoIsle/chat/migrations/20260503090000_debate_npc_action_spine.sql)
+19. [NPC ops control migration](/Users/panyihang/Documents/EchoIsle/chat/migrations/20260504100000_debate_npc_ops_control_plane.sql)
+20. [NPC public interaction migration](/Users/panyihang/Documents/EchoIsle/chat/migrations/20260504110000_debate_npc_public_call_history_feedback.sql)
+21. [OpsConsolePage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/OpsConsolePage.tsx)
+22. [ops-domain index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/ops-domain/src/index.ts)
+23. [虚拟裁判NPC_开发计划.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/虚拟裁判NPC_开发计划.md)
 
 ### 3.3 AI 裁判 / 报告 / 申诉 / 平局投票
 
@@ -347,20 +348,23 @@ AI Judge real-env / runtime evidence 优先看：
 2. [openai_provider.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/openai_provider.py)
    - OpenAI-compatible chat completions JSON adapter
 
-3. [guard.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/guard.py)
+3. [llm_runtime.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/llm_runtime.py)
+   - LLM canary、成本 / token / 延迟观测、连续失败熔断和 runtime metrics snapshot
+
+4. [guard.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/guard.py)
    - 禁止正式裁决字段、限制公开文本长度、校验 action 语义
 
-4. [chat_client.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/chat_client.py)
+5. [chat_client.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/chat_client.py)
    - 从 `chat` 拉取公开 context，并提交候选动作到 `chat` 内部 action sink；`chat` 仍是房间事实源
 
-5. [event_processor.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/event_processor.py)
+6. [event_processor.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/event_processor.py)
    - 处理 `DebateMessageCreated` trigger，串联 context fetch、executor router 与 candidate callback
 
-6. [event_consumer.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/event_consumer.py)
+7. [event_consumer.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/event_consumer.py)
    - 解码 Kafka/event-bus envelope，驱动 `NpcEventProcessor`，维护 commit/retry/DLQ 语义；webhook 默认仅作为 local-dev 入口
 
-7. [tests](/Users/panyihang/Documents/EchoIsle/npc_service/tests)
-   - 当前覆盖 executor router、LLM fallback、guard、OpenAI adapter、chat client、event processor、event consumer 与 FastAPI 路由
+8. [tests](/Users/panyihang/Documents/EchoIsle/npc_service/tests)
+   - 当前覆盖 executor router、LLM canary / fallback / 熔断 / 成本、guard、OpenAI adapter、chat client、event processor、event consumer 与 FastAPI 路由
 
 ### 5.3 最常用 AI 服务文件
 

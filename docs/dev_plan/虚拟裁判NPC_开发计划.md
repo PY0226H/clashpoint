@@ -28,7 +28,7 @@
 1. 移除或替换本地临时 webhook 触发路径，落到长期事件消费形态。
 2. 让观战用户也能实时感知 NPC，同时保持发言权限隔离。
 3. 已补齐运营控制、用户反馈、公开呼叫、近期行为记录等 PRD 中的核心产品能力。
-4. 强化真实 LLM 主路径的成本、延迟、熔断、观测和可回滚能力。
+4. 已强化真实 LLM 主路径的成本、延迟、熔断、观测和可回滚能力。
 5. 形成真实多服务浏览器 smoke 与可观测性证据。
 6. 对暂停 / 恢复辩论强动作先完成状态机设计评审，再决定是否进入实现切片。
 
@@ -53,7 +53,7 @@
 | NPC action 事实源 | [npc.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/debate/npc.rs) 与 [debate_npc.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/debate_npc.rs) 已提供 NPC context 查询、candidate 接收、近期行为、公开呼叫和反馈主链 | 下一阶段继续复用该事实源，新增能力不得绕过 `chat` 二次校验 |
 | 实时事件 | [notif.rs](/Users/panyihang/Documents/EchoIsle/chat/notify_server/src/notif.rs)、[realtime-sdk](/Users/panyihang/Documents/EchoIsle/frontend/packages/realtime-sdk/src/index.ts)、[debate-domain](/Users/panyihang/Documents/EchoIsle/frontend/packages/debate-domain/src/index.ts) 已识别 `DebateNpcActionCreated` | 观战可见性和 replay smoke 应优先复用现有事件，不新增平行 WS 事件 |
 | 前端展示 | [DebateNpcPanel.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/components/DebateNpcPanel.tsx) 与 [DebateNpcModel.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/components/DebateNpcModel.ts) 已提供 NPC 面板、状态模型、公开呼叫和反馈入口 | 下一阶段补视觉体验增强时应保持与 Judge / Draw 区隔 |
-| NPC 服务 | [npc_service](/Users/panyihang/Documents/EchoIsle/npc_service) 已包含 FastAPI app、event processor、chat client、executor router、OpenAI-compatible provider、guard、event consumer、公开呼叫事件处理和 tests | 下一阶段重点是真实 LLM canary、熔断/成本/延迟观测和持久化 DLQ |
+| NPC 服务 | [npc_service](/Users/panyihang/Documents/EchoIsle/npc_service) 已包含 FastAPI app、event processor、chat client、executor router、OpenAI-compatible provider、guard、event consumer、公开呼叫事件处理、LLM canary / 熔断 / 成本观测和 tests | 下一阶段重点是动态形象、动效分级、低动效和移动端体验 |
 | 临时输入路径 | [app_factory.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/app_factory.py) 保留 local-dev webhook trigger | 生产默认输入已切到 Kafka/event-bus consumer，webhook 仅用于本地调试 |
 | 完成与债务 | [completed.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/completed.md) B50 记录 MVP 完成；[todo.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/todo.md) C47 记录后置债 | 本计划优先消化 C47，同时补齐 PRD 的观战、运营、呼叫、反馈和暂停设计缺口 |
 
@@ -69,13 +69,13 @@
 6. 观战用户实时可见 NPC action。
 7. 用户可在 NPC 面板内发起公开呼叫，查看近期行为，并提交私有反馈。
 8. 运营可按房间 / 场次控制 NPC 开关、风格、能力和人工接管。
+9. 真实 LLM canary、成本 / 延迟观测、熔断、`no_action` 静默和 rule fallback 边界已具备自动化验证。
 
 ### 4.2 后续重点补齐
 
-1. 真实 LLM 主路径的成本、延迟、熔断和降级观测。
+1. 动态形象、动效分级、低动效和移动端体验增强。
 2. 暂停 / 恢复辩论状态机设计。
 3. 真实多服务运行态 smoke 和 dashboard 基线。
-4. 动态形象、动效分级、低动效和移动端体验增强。
 
 ### 4.3 本阶段仍不直接做
 
@@ -96,7 +96,7 @@
 | P1-C. `virtual-judge-npc-spectator-realtime-visibility` | 让观战用户可实时看到 NPC action，同时保持只读权限 | 已完成 | notify Debate Room WS 支持 participant/spectator 访问，connected spectators 可收到 NPC action；消息列表返回 viewer role，前端按观战态禁用参赛动作 |
 | P1-D. `virtual-judge-npc-ops-control-plane` | 补齐运营开关、风格、能力控制和人工接管最小闭环 | 已完成 | 已新增 chat room config 扩展、Ops API、candidate 状态/能力二次拦截、npc_service roomConfig 静默降级和 Ops Console 最小入口 |
 | P2-E. `virtual-judge-npc-public-call-history-feedback` | 支持用户公开呼叫 NPC、查看近期行为和提交轻量反馈 | 已完成 | 已采用 NPC 面板公开请求入口，chat 作为事实源，npc_service 消费公开呼叫事件 |
-| P2-F. `virtual-judge-npc-llm-canary-cost-latency-guard` | 强化真实 LLM 主路径：provider canary、成本/延迟预算、熔断和回滚 | 待执行 | 确保 `llm_executor_v1` 是主路径，rule 只降级 |
+| P2-F. `virtual-judge-npc-llm-canary-cost-latency-guard` | 强化真实 LLM 主路径：provider canary、成本/延迟预算、熔断和回滚 | 已完成 | npc_service 已补 LLM canary、熔断、成本/延迟指标、`no_action` 和内部 metrics 查询 |
 | P2-G. `virtual-judge-npc-visual-experience-polish` | 增强动态形象、动效分级、低动效和移动端表现 | 待执行 | 对齐 PRD 第 6 节动态形象展示 |
 | P3-H. `virtual-judge-npc-pause-state-machine-design-gate` | 完成暂停 / 恢复辩论强动作状态机设计与评审 | 待执行 | 先设计再实现，不在本模块中默认写强动作代码 |
 | P3-I. `virtual-judge-npc-observability-runtime-smoke` | 建立 dashboard 基线与真实多服务浏览器 smoke 证据 | 待执行 | 消化 C47 的 runtime smoke 和 observability 债务 |
@@ -104,11 +104,10 @@
 
 ## 6. 下一开发模块建议
 
-1. 下一步执行 P2-F `virtual-judge-npc-llm-canary-cost-latency-guard`，强化真实 LLM 主路径的可观测和可回滚能力。
-2. P2-F 完成后执行 P2-G `virtual-judge-npc-visual-experience-polish`，增强动态形象和移动端体验。
-3. P2-G 可按资源拆开推进，但视觉增强必须保持正式裁决隔离。
-4. P3-H 暂停状态机只做设计门禁；设计未通过前不实现 NPC pause tool。
-5. P3-I 作为 Beta 验收前的统一运行态证据切片。
+1. 下一步执行 P2-G `virtual-judge-npc-visual-experience-polish`，增强动态形象和移动端体验。
+2. P2-G 可按资源拆开推进，但视觉增强必须保持正式裁决隔离。
+3. P3-H 暂停状态机只做设计门禁；设计未通过前不实现 NPC pause tool。
+4. P3-I 作为 Beta 验收前的统一运行态证据切片。
 
 ## 7. 模块详情
 
@@ -341,6 +340,16 @@
 2. fault injection tests。
 3. canary evidence 文档。
 
+完成结果：
+
+1. `settings.py` 增加 LLM canary、熔断阈值 / 冷却、每日 / 每房成本上限、provider 名称、token 单价和 prompt 版本配置。
+2. `openai_provider.py` 将 provider 状态码映射为 `llm_auth_error`、`llm_rate_limited`、`llm_provider_unavailable` 等可观测错误码，并补齐 model / provider / prompt metadata。
+3. `executors.py` 默认通过 `llm_executor_v1` 生成动作；canary 拦截、成本超限、provider 失败、guard 违规或 circuit open 时才 fallback 到 `rule_executor_v1`。
+4. `guard.py` 支持 LLM 返回显式 `no_action`，该路径静默且不触发 rule fallback。
+5. `llm_runtime.py` 提供进程内 LLM metrics、成本估算、连续失败熔断和 runtime snapshot。
+6. `app_factory.py` 增加内部指标接口 `GET /api/internal/npc/runtime/metrics`，需要 `x-ai-internal-key`。
+7. 运行手册写入 [虚拟裁判NPC_LLM_Canary运行手册.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_LLM_Canary运行手册.md)。
+
 ### P2-G. `virtual-judge-npc-visual-experience-polish`
 
 目标：
@@ -483,7 +492,7 @@
 
 ## 9. 当前待决问题
 
-1. 真实 LLM canary 首选模型、超时、成本上限和默认关闭策略。
+1. 线上 LLM canary 的真实模型、配额和成本上限最终值需在部署环境确认；默认关闭 / 回滚策略已写入运行手册。
 2. 动态形象首版资产采用 CSS、图片序列、Lottie 还是 canvas。
 3. 暂停 / 恢复是否由 NPC 直接触发，还是只能提出暂停建议并等待运营确认。
 
@@ -498,3 +507,4 @@
 - 2026-05-04：完成 P1-C `virtual-judge-npc-spectator-realtime-visibility`；notify Debate Room WS 入口支持 participant/spectator 两种访问，connected spectator 会被纳入房间事件 fanout，`ListDebateMessagesOutput` 返回 viewer role，前端 Debate Room 观战态禁用发言、置顶、Judge / Draw 等参赛动作；下一步执行 P1-D `virtual-judge-npc-ops-control-plane`。
 - 2026-05-04：完成 P1-D `virtual-judge-npc-ops-control-plane`；chat 新增 NPC room config 扩展、Ops 读写 API、状态/能力二次拦截和人工接管状态事件，npc_service 按 `roomConfig` 静默降级，Ops Console 增加按场次配置入口；下一步执行 P2-E `virtual-judge-npc-public-call-history-feedback`。
 - 2026-05-04：完成 P2-E `virtual-judge-npc-public-call-history-feedback`；chat 新增公开呼叫、近期行为和私有反馈事实源/API，npc_service 支持公开呼叫事件与 `publicCall` context，前端 NPC 面板增加公开请求、近期行为 hydration 和反馈入口；下一步执行 P2-F `virtual-judge-npc-llm-canary-cost-latency-guard`。
+- 2026-05-04：完成 P2-F `virtual-judge-npc-llm-canary-cost-latency-guard`；npc_service 新增 LLM canary、成本 / 延迟 / token metrics、provider 错误码、连续失败熔断、`no_action` 静默和内部 metrics 查询；运行手册写入 module_design；下一步执行 P2-G `virtual-judge-npc-visual-experience-polish`。

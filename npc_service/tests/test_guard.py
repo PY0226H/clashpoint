@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import pytest
-from app.guard import NpcGuardError, assert_no_forbidden_fields, candidate_from_raw_output
+from app.guard import (
+    NpcGuardError,
+    NpcNoAction,
+    assert_no_forbidden_fields,
+    candidate_from_raw_output,
+)
 
 from helpers import make_context, make_settings
 
@@ -27,6 +32,22 @@ def test_candidate_from_raw_output_rejects_overlong_public_text() -> None:
         )
 
     assert err.value.reason_code == "public_text_too_long"
+
+
+def test_candidate_from_raw_output_allows_explicit_no_action_signal() -> None:
+    with pytest.raises(NpcNoAction) as err:
+        candidate_from_raw_output(
+            {
+                "actionType": "no_action",
+                "reasonCode": "stay_quiet",
+            },
+            context=make_context(),
+            settings=make_settings(),
+            executor_kind="llm_executor_v1",
+            executor_version="llm_executor_v1",
+        )
+
+    assert err.value.reason_code == "llm_no_action"
 
 
 def test_candidate_from_raw_output_builds_public_praise_candidate() -> None:

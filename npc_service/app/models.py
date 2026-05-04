@@ -91,15 +91,60 @@ class NpcActionCandidate(CamelModel):
     trace_id: str | None = Field(default=None, alias="traceId")
 
 
+class LlmTokenUsage(CamelModel):
+    prompt_tokens: int = Field(default=0, alias="promptTokens")
+    completion_tokens: int = Field(default=0, alias="completionTokens")
+    total_tokens: int = Field(default=0, alias="totalTokens")
+
+
 class NpcDecisionRun(CamelModel):
     status: Literal["created", "fallback", "silent", "rejected"]
     executor_kind: str = Field(alias="executorKind")
     executor_version: str = Field(alias="executorVersion")
     fallback_used: bool = Field(alias="fallbackUsed")
     fallback_reason: str | None = Field(default=None, alias="fallbackReason")
+    fallback_from_executor_kind: str | None = Field(default=None, alias="fallbackFromExecutorKind")
     candidate: NpcActionCandidate | None = None
     guard_reason: str | None = Field(default=None, alias="guardReason")
+    llm_error_code: str | None = Field(default=None, alias="llmErrorCode")
+    llm_latency_ms: int | None = Field(default=None, alias="llmLatencyMs")
+    llm_token_usage: LlmTokenUsage | None = Field(default=None, alias="llmTokenUsage")
+    llm_estimated_cost_microusd: int | None = Field(default=None, alias="llmEstimatedCostMicrousd")
+    llm_model: str | None = Field(default=None, alias="llmModel")
+    llm_provider_name: str | None = Field(default=None, alias="llmProviderName")
+    llm_canary_enabled: bool | None = Field(default=None, alias="llmCanaryEnabled")
+    llm_circuit_open_until: str | None = Field(default=None, alias="llmCircuitOpenUntil")
+    policy_version: str | None = Field(default=None, alias="policyVersion")
+    prompt_version: str | None = Field(default=None, alias="promptVersion")
     failures: list[str] = Field(default_factory=list)
+
+
+class NpcRuntimeMetricsSnapshot(CamelModel):
+    llm_attempt_total: int = Field(alias="llmAttemptTotal")
+    llm_success_total: int = Field(alias="llmSuccessTotal")
+    llm_fallback_total: int = Field(alias="llmFallbackTotal")
+    llm_no_action_total: int = Field(alias="llmNoActionTotal")
+    llm_guard_rejected_total: int = Field(alias="llmGuardRejectedTotal")
+    llm_error_total: int = Field(alias="llmErrorTotal")
+    llm_circuit_open_total: int = Field(alias="llmCircuitOpenTotal")
+    llm_consecutive_failure_count: int = Field(alias="llmConsecutiveFailureCount")
+    llm_circuit_open_until: str | None = Field(alias="llmCircuitOpenUntil")
+    llm_last_error_code: str | None = Field(alias="llmLastErrorCode")
+    llm_last_latency_ms: int | None = Field(alias="llmLastLatencyMs")
+    llm_latency_total_ms: int = Field(alias="llmLatencyTotalMs")
+    llm_prompt_tokens_total: int = Field(alias="llmPromptTokensTotal")
+    llm_completion_tokens_total: int = Field(alias="llmCompletionTokensTotal")
+    llm_total_tokens_total: int = Field(alias="llmTotalTokensTotal")
+    llm_estimated_cost_microusd_total: int = Field(alias="llmEstimatedCostMicrousdTotal")
+    llm_estimated_cost_microusd_by_session: dict[str, int] = Field(
+        alias="llmEstimatedCostMicrousdBySession"
+    )
+    llm_model: str | None = Field(alias="llmModel")
+    llm_provider_name: str | None = Field(alias="llmProviderName")
+    llm_canary_enabled: bool = Field(alias="llmCanaryEnabled")
+    llm_canary_session_ids: list[int] = Field(alias="llmCanarySessionIds")
+    policy_version: str = Field(alias="policyVersion")
+    prompt_version: str = Field(alias="promptVersion")
 
 
 class SubmitActionCandidateOutput(CamelModel):

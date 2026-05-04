@@ -8,7 +8,7 @@ from app.models import (
     NpcPublicCallSnapshot,
     NpcRoomConfig,
 )
-from app.settings import EventConsumerSettings, OpenAIProviderSettings, Settings
+from app.settings import EventConsumerSettings, LlmRuntimeSettings, OpenAIProviderSettings, Settings
 
 
 def make_settings(
@@ -16,6 +16,14 @@ def make_settings(
     api_key: str = "test-openai-key",
     llm_enabled: bool = True,
     rule_fallback_enabled: bool = True,
+    llm_canary_enabled: bool = False,
+    llm_canary_session_ids: tuple[int, ...] = (),
+    llm_circuit_failure_threshold: int = 3,
+    llm_circuit_cooldown_secs: float = 60.0,
+    llm_daily_cost_limit_microusd: int = 0,
+    llm_room_cost_limit_microusd: int = 0,
+    input_token_cost_microusd: int = 0,
+    output_token_cost_microusd: int = 0,
     event_submit_max_attempts: int = 2,
     event_consumer_enabled: bool = False,
     event_webhook_enabled: bool = True,
@@ -32,8 +40,17 @@ def make_settings(
         event_submit_retry_backoff_ms=0,
         npc_id="virtual_judge_default",
         npc_policy_version="npc_policy_test",
+        npc_prompt_version="npc_prompt_test",
         llm_enabled=llm_enabled,
         rule_fallback_enabled=rule_fallback_enabled,
+        llm_runtime=LlmRuntimeSettings(
+            canary_enabled=llm_canary_enabled,
+            canary_session_ids=llm_canary_session_ids,
+            circuit_failure_threshold=llm_circuit_failure_threshold,
+            circuit_cooldown_secs=llm_circuit_cooldown_secs,
+            daily_cost_limit_microusd=llm_daily_cost_limit_microusd,
+            room_cost_limit_microusd=llm_room_cost_limit_microusd,
+        ),
         event_consumer=EventConsumerSettings(
             enabled=event_consumer_enabled,
             webhook_enabled=event_webhook_enabled,
@@ -51,6 +68,7 @@ def make_settings(
             dlq_path=event_consumer_dlq_path,
         ),
         openai=OpenAIProviderSettings(
+            provider_name="openai-compatible-test",
             api_key=api_key,
             model="test-model",
             base_url="http://openai.test/v1",
@@ -58,6 +76,8 @@ def make_settings(
             temperature=0.2,
             max_retries=1,
             max_output_tokens=256,
+            input_token_cost_microusd=input_token_cost_microusd,
+            output_token_cost_microusd=output_token_cost_microusd,
         ),
     )
 

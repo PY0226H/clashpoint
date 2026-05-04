@@ -15,8 +15,29 @@ def parse_env_bool(value: str | None, *, default: bool = False) -> bool:
     return default
 
 
+def parse_env_int(value: str | None, *, default: int, minimum: int | None = None) -> int:
+    try:
+        parsed = int(value) if value is not None else default
+    except ValueError:
+        parsed = default
+    if minimum is not None:
+        return max(minimum, parsed)
+    return parsed
+
+
+def parse_env_float(value: str | None, *, default: float, minimum: float | None = None) -> float:
+    try:
+        parsed = float(value) if value is not None else default
+    except ValueError:
+        parsed = default
+    if minimum is not None:
+        return max(minimum, parsed)
+    return parsed
+
+
 @dataclass(frozen=True)
 class OpenAIProviderSettings:
+    provider_name: str
     api_key: str
     model: str
     base_url: str
@@ -24,6 +45,8 @@ class OpenAIProviderSettings:
     temperature: float
     max_retries: int
     max_output_tokens: int
+    input_token_cost_microusd: int
+    output_token_cost_microusd: int
 
     @property
     def configured(self) -> bool:
@@ -46,6 +69,16 @@ class EventConsumerSettings:
 
 
 @dataclass(frozen=True)
+class LlmRuntimeSettings:
+    canary_enabled: bool
+    canary_session_ids: tuple[int, ...]
+    circuit_failure_threshold: int
+    circuit_cooldown_secs: float
+    daily_cost_limit_microusd: int
+    room_cost_limit_microusd: int
+
+
+@dataclass(frozen=True)
 class Settings:
     service_name: str
     ai_internal_key: str
@@ -56,8 +89,10 @@ class Settings:
     event_submit_retry_backoff_ms: int
     npc_id: str
     npc_policy_version: str
+    npc_prompt_version: str
     llm_enabled: bool
     rule_fallback_enabled: bool
+    llm_runtime: LlmRuntimeSettings
     event_consumer: EventConsumerSettings
     openai: OpenAIProviderSettings
 
@@ -67,6 +102,21 @@ def parse_env_csv(value: str | None, *, default: tuple[str, ...]) -> tuple[str, 
         return default
     items = tuple(item.strip() for item in value.split(",") if item.strip())
     return items or default
+
+
+def parse_env_int_csv(value: str | None, *, default: tuple[int, ...]) -> tuple[int, ...]:
+    if value is None:
+        return default
+    parsed: list[int] = []
+    for item in value.split(","):
+        token = item.strip()
+        if not token:
+            continue
+        try:
+            parsed.append(int(token))
+        except ValueError:
+            continue
+    return tuple(parsed) or default
 
 
 def load_settings() -> Settings:
@@ -108,19 +158,77 @@ def load_settings() -> Settings:
         ),
         npc_id=os.getenv("NPC_SERVICE_NPC_ID", "virtual_judge_default"),
         npc_policy_version=os.getenv("NPC_SERVICE_POLICY_VERSION", "npc_policy_v1"),
+        npc_prompt_version=os.getenv("NPC_SERVICE_PROMPT_VERSION", "npc_prompt_v1"),
         llm_enabled=parse_env_bool(os.getenv("NPC_SERVICE_LLM_ENABLED"), default=True),
         rule_fallback_enabled=parse_env_bool(
             os.getenv("NPC_SERVICE_RULE_FALLBACK_ENABLED"),
             default=True,
         ),
+        llm_runtime=LlmRuntimeSettings(
+            canary_enabled=parse_env_bool(
+                os.getenv("NPC_SERVICE_LLM_CANARY_ENABLED"),
+                default=False,
+            ),
+            canary_session_ids=parse_env_int_csv(
+                os.getenv("NPC_SERVICE_LLM_CANARY_SESSION_IDS"),
+                default=(),
+            ),
+            circuit_failure_threshold=parse_env_int(
+                os.getenv("NPC_SERVICE_LLM_CIRCUIT_FAILURE_THRESHOLD"),
+                default=3,
+                minimum=1,
+            ),
+            circuit_cooldown_secs=parse_env_float(
+                os.getenv("NPC_SERVICE_LLM_CIRCUIT_COOLDOWN_SECS"),
+                default=60.0,
+                minimum=0.0,
+            ),
+            daily_cost_limit_microusd=parse_env_int(
+                os.getenv("NPC_SERVICE_LLM_DAILY_COST_LIMIT_MICRO_USD"),
+                default=0,
+                minimum=0,
+            ),
+            room_cost_limit_microusd=parse_env_int(
+                os.getenv("NPC_SERVICE_LLM_ROOM_COST_LIMIT_MICRO_USD"),
+                default=0,
+                minimum=0,
+            ),
+        ),
         event_consumer=event_consumer,
         openai=OpenAIProviderSettings(
+            provider_name=os.getenv("NPC_OPENAI_PROVIDER_NAME", "openai-compatible"),
             api_key=os.getenv("NPC_OPENAI_API_KEY", ""),
             model=os.getenv("NPC_OPENAI_MODEL", "gpt-4.1-mini"),
             base_url=os.getenv("NPC_OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
-            timeout_secs=float(os.getenv("NPC_OPENAI_TIMEOUT_SECS", "12")),
-            temperature=float(os.getenv("NPC_OPENAI_TEMPERATURE", "0.4")),
-            max_retries=max(1, int(os.getenv("NPC_OPENAI_MAX_RETRIES", "1"))),
-            max_output_tokens=max(64, int(os.getenv("NPC_OPENAI_MAX_OUTPUT_TOKENS", "500"))),
+            timeout_secs=parse_env_float(
+                os.getenv("NPC_OPENAI_TIMEOUT_SECS"),
+                default=12.0,
+                minimum=0.1,
+            ),
+            temperature=parse_env_float(
+                os.getenv("NPC_OPENAI_TEMPERATURE"),
+                default=0.4,
+                minimum=0.0,
+            ),
+            max_retries=parse_env_int(
+                os.getenv("NPC_OPENAI_MAX_RETRIES"),
+                default=1,
+                minimum=1,
+            ),
+            max_output_tokens=parse_env_int(
+                os.getenv("NPC_OPENAI_MAX_OUTPUT_TOKENS"),
+                default=500,
+                minimum=64,
+            ),
+            input_token_cost_microusd=parse_env_int(
+                os.getenv("NPC_OPENAI_INPUT_TOKEN_COST_MICRO_USD"),
+                default=0,
+                minimum=0,
+            ),
+            output_token_cost_microusd=parse_env_int(
+                os.getenv("NPC_OPENAI_OUTPUT_TOKEN_COST_MICRO_USD"),
+                default=0,
+                minimum=0,
+            ),
         ),
     )

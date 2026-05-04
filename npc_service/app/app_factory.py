@@ -16,6 +16,7 @@ from .models import (
     DebateNpcPublicCallCreatedTrigger,
     NpcDecisionContext,
     NpcDecisionRun,
+    NpcRuntimeMetricsSnapshot,
 )
 from .settings import Settings, load_settings
 
@@ -66,6 +67,13 @@ def create_app(
             "executorPrimary": LLM_EXECUTOR_KIND,
             "llmEnabled": settings.llm_enabled,
             "llmConfigured": settings.openai.configured,
+            "llmProviderName": settings.openai.provider_name,
+            "llmModel": settings.openai.model,
+            "llmCanaryEnabled": settings.llm_runtime.canary_enabled,
+            "llmCanarySessionIds": list(settings.llm_runtime.canary_session_ids),
+            "llmCircuitFailureThreshold": settings.llm_runtime.circuit_failure_threshold,
+            "llmDailyCostLimitMicrousd": settings.llm_runtime.daily_cost_limit_microusd,
+            "llmRoomCostLimitMicrousd": settings.llm_runtime.room_cost_limit_microusd,
             "ruleFallbackEnabled": settings.rule_fallback_enabled,
             "eventConsumerEnabled": settings.event_consumer.enabled,
             "eventConsumerSource": settings.event_consumer.source,
@@ -75,6 +83,17 @@ def create_app(
     @app.post("/api/internal/npc/decisions/evaluate", response_model=NpcDecisionRun)
     async def evaluate_decision(context: NpcDecisionContext) -> NpcDecisionRun:
         return await router.decide(context)
+
+    @app.get("/api/internal/npc/runtime/metrics", response_model=NpcRuntimeMetricsSnapshot)
+    async def runtime_metrics(
+        x_ai_internal_key: str | None = Header(default=None),
+    ) -> NpcRuntimeMetricsSnapshot:
+        if x_ai_internal_key != settings.ai_internal_key:
+            raise HTTPException(status_code=401, detail="invalid internal key")
+        snapshot_fn = getattr(router, "metrics_snapshot", None)
+        if not callable(snapshot_fn):
+            raise HTTPException(status_code=503, detail="runtime metrics unavailable")
+        return snapshot_fn()
 
     @app.post("/api/internal/npc/events/debate-message-created")
     async def handle_debate_message_created(

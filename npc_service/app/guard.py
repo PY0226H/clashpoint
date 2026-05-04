@@ -58,6 +58,12 @@ class NpcGuardError(ValueError):
         self.reason_code = reason_code
 
 
+class NpcNoAction(RuntimeError):
+    def __init__(self, reason_code: str = "llm_no_action") -> None:
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+
+
 def normalize_key(value: object) -> str:
     return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
 
@@ -108,6 +114,8 @@ def candidate_from_raw_output(
     trace_id: str | None = None,
 ) -> NpcActionCandidate:
     assert_no_forbidden_fields(raw)
+    if _is_no_action(raw):
+        raise NpcNoAction()
     action_type = _coerce_action_type(_get(raw, "actionType", "action_type", "type"))
     public_text = _normalize_public_text(_get(raw, "publicText", "public_text", "text"))
     target_message = _resolve_target_message(raw, context)
@@ -167,6 +175,16 @@ def _get(raw: Mapping[str, Any], *keys: str) -> Any:
         if key in raw:
             return raw[key]
     return None
+
+
+def _is_no_action(raw: Mapping[str, Any]) -> bool:
+    action_type = str(_get(raw, "actionType", "action_type", "type") or "").strip().lower()
+    if action_type == "no_action":
+        return True
+    no_action = _get(raw, "noAction", "no_action")
+    if isinstance(no_action, bool):
+        return no_action
+    return str(no_action or "").strip().lower() in {"1", "true", "yes"}
 
 
 def _coerce_action_type(value: object) -> NpcActionType:

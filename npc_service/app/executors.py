@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
-from .guard import NpcGuardError, candidate_from_raw_output
-from .models import NpcActionCandidate, NpcDecisionContext, NpcDecisionRun
-from .openai_provider import LlmActionProvider, OpenAICompatibleProvider
+from .guard import NpcGuardError, NpcNoAction, candidate_from_raw_output
+from .llm_runtime import LlmRunTelemetry, NpcRuntimeMetrics, build_llm_telemetry
+from .models import LlmTokenUsage, NpcActionCandidate, NpcDecisionContext, NpcDecisionRun
+from .openai_provider import LlmActionProvider, OpenAICompatibleProvider, OpenAIProviderError
 from .settings import Settings
 
 LLM_EXECUTOR_KIND = "llm_executor_v1"
@@ -20,24 +23,71 @@ class ExecutorUnavailable(RuntimeError):
         self.reason_code = reason_code
 
 
+@dataclass(frozen=True)
+class LlmDecisionResult:
+    candidate: NpcActionCandidate
+    telemetry: LlmRunTelemetry
+
+
+class LlmExecutorError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        reason_code: str,
+        telemetry: LlmRunTelemetry | None,
+        guard_reason: str | None = None,
+    ) -> None:
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+        self.telemetry = telemetry
+        self.guard_reason = guard_reason
+
+
+class LlmNoActionDecision(RuntimeError):
+    def __init__(self, *, telemetry: LlmRunTelemetry, reason_code: str) -> None:
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+        self.telemetry = telemetry
+
+
 class LlmExecutorV1:
     def __init__(self, *, settings: Settings, provider: LlmActionProvider) -> None:
         self._settings = settings
         self._provider = provider
 
-    async def decide(self, context: NpcDecisionContext) -> NpcActionCandidate:
+    async def decide(self, context: NpcDecisionContext) -> LlmDecisionResult:
         if not self._settings.llm_enabled:
             raise ExecutorUnavailable("llm_disabled")
         if not self._settings.openai.configured:
             raise ExecutorUnavailable("llm_not_configured")
-        raw = await self._provider.generate_action(context)
-        return candidate_from_raw_output(
-            raw,
-            context=context,
-            settings=self._settings,
-            executor_kind=LLM_EXECUTOR_KIND,
-            executor_version=LLM_EXECUTOR_VERSION,
-        )
+        started = time.perf_counter()
+        try:
+            raw = await self._provider.generate_action(context)
+        except Exception as err:
+            latency_ms = _elapsed_ms(started)
+            raise LlmExecutorError(
+                reason_code=_failure_reason(err),
+                telemetry=_empty_llm_telemetry(self._settings, latency_ms=latency_ms),
+            ) from err
+        latency_ms = _elapsed_ms(started)
+        telemetry = build_llm_telemetry(raw, settings=self._settings, latency_ms=latency_ms)
+        try:
+            candidate = candidate_from_raw_output(
+                raw,
+                context=context,
+                settings=self._settings,
+                executor_kind=LLM_EXECUTOR_KIND,
+                executor_version=LLM_EXECUTOR_VERSION,
+            )
+        except NpcNoAction as err:
+            raise LlmNoActionDecision(telemetry=telemetry, reason_code=err.reason_code) from err
+        except NpcGuardError as err:
+            raise LlmExecutorError(
+                reason_code=err.reason_code,
+                telemetry=telemetry,
+                guard_reason=err.reason_code,
+            ) from err
+        return LlmDecisionResult(candidate=candidate, telemetry=telemetry)
 
 
 class RuleExecutorV1:
@@ -108,36 +158,83 @@ class NpcExecutorRouter:
         settings: Settings,
         llm_executor: LlmExecutorV1,
         rule_executor: RuleExecutorV1,
+        metrics: NpcRuntimeMetrics | None = None,
     ) -> None:
         self._settings = settings
         self._llm_executor = llm_executor
         self._rule_executor = rule_executor
+        self._metrics = metrics or NpcRuntimeMetrics(settings=settings)
 
     async def decide(self, context: NpcDecisionContext) -> NpcDecisionRun:
         failures: list[str] = []
-        try:
-            candidate = await self._llm_executor.decide(context)
-            return NpcDecisionRun(
-                status="created",
-                executorKind=LLM_EXECUTOR_KIND,
-                executorVersion=LLM_EXECUTOR_VERSION,
-                fallbackUsed=False,
-                candidate=candidate,
-                failures=failures,
-            )
-        except Exception as err:
-            failure_reason = _failure_reason(err)
-            failures.append(f"{LLM_EXECUTOR_KIND}:{failure_reason}")
-            if not self._settings.rule_fallback_enabled:
+        preflight_reason = self._metrics.preflight_failure_reason(context)
+        llm_telemetry: LlmRunTelemetry | None = None
+        llm_guard_reason: str | None = None
+        if preflight_reason is None:
+            self._metrics.record_attempt()
+            try:
+                llm_result = await self._llm_executor.decide(context)
+                self._metrics.record_success(context=context, telemetry=llm_result.telemetry)
                 return NpcDecisionRun(
-                    status="rejected",
+                    status="created",
                     executorKind=LLM_EXECUTOR_KIND,
                     executorVersion=LLM_EXECUTOR_VERSION,
                     fallbackUsed=False,
-                    fallbackReason=failure_reason,
-                    guardReason=_guard_reason(err),
+                    candidate=llm_result.candidate,
                     failures=failures,
+                    **_llm_observability_fields(
+                        settings=self._settings,
+                        metrics=self._metrics,
+                        telemetry=llm_result.telemetry,
+                        error_code=None,
+                    ),
                 )
+            except LlmNoActionDecision as err:
+                self._metrics.record_no_action(context=context, telemetry=err.telemetry)
+                return NpcDecisionRun(
+                    status="silent",
+                    executorKind=LLM_EXECUTOR_KIND,
+                    executorVersion=LLM_EXECUTOR_VERSION,
+                    fallbackUsed=False,
+                    guardReason=err.reason_code,
+                    failures=failures,
+                    **_llm_observability_fields(
+                        settings=self._settings,
+                        metrics=self._metrics,
+                        telemetry=err.telemetry,
+                        error_code=None,
+                    ),
+                )
+            except Exception as err:
+                failure_reason = _failure_reason(err)
+                llm_telemetry = _llm_telemetry_from_error(err)
+                llm_guard_reason = _guard_reason(err)
+                self._metrics.record_failure(
+                    failure_reason,
+                    context=context,
+                    guard_rejected=llm_guard_reason is not None,
+                    telemetry=llm_telemetry,
+                )
+        else:
+            failure_reason = preflight_reason
+        failures.append(f"{LLM_EXECUTOR_KIND}:{failure_reason}")
+        if not self._settings.rule_fallback_enabled:
+            return NpcDecisionRun(
+                status="rejected",
+                executorKind=LLM_EXECUTOR_KIND,
+                executorVersion=LLM_EXECUTOR_VERSION,
+                fallbackUsed=False,
+                fallbackReason=failure_reason,
+                guardReason=llm_guard_reason,
+                failures=failures,
+                **_llm_observability_fields(
+                    settings=self._settings,
+                    metrics=self._metrics,
+                    telemetry=llm_telemetry,
+                    error_code=failure_reason,
+                ),
+            )
+        self._metrics.record_fallback()
         try:
             fallback_reason = failures[-1].split(":", 1)[1] if failures else None
             candidate = await self._rule_executor.decide(
@@ -151,7 +248,14 @@ class NpcExecutorRouter:
                     executorVersion=RULE_EXECUTOR_VERSION,
                     fallbackUsed=True,
                     fallbackReason=fallback_reason,
+                    fallbackFromExecutorKind=LLM_EXECUTOR_KIND,
                     failures=failures,
+                    **_llm_observability_fields(
+                        settings=self._settings,
+                        metrics=self._metrics,
+                        telemetry=llm_telemetry,
+                        error_code=fallback_reason,
+                    ),
                 )
             return NpcDecisionRun(
                 status="fallback",
@@ -159,8 +263,15 @@ class NpcExecutorRouter:
                 executorVersion=RULE_EXECUTOR_VERSION,
                 fallbackUsed=True,
                 fallbackReason=fallback_reason,
+                fallbackFromExecutorKind=LLM_EXECUTOR_KIND,
                 candidate=candidate,
                 failures=failures,
+                **_llm_observability_fields(
+                    settings=self._settings,
+                    metrics=self._metrics,
+                    telemetry=llm_telemetry,
+                    error_code=fallback_reason,
+                ),
             )
         except Exception as err:
             failure_reason = _failure_reason(err)
@@ -173,7 +284,16 @@ class NpcExecutorRouter:
                 fallbackReason=failure_reason,
                 guardReason=_guard_reason(err),
                 failures=failures,
+                **_llm_observability_fields(
+                    settings=self._settings,
+                    metrics=self._metrics,
+                    telemetry=llm_telemetry,
+                    error_code=failure_reason,
+                ),
             )
+
+    def metrics_snapshot(self):
+        return self._metrics.snapshot()
 
 
 def create_default_router(settings: Settings) -> NpcExecutorRouter:
@@ -186,7 +306,7 @@ def create_default_router(settings: Settings) -> NpcExecutorRouter:
 
 
 def _failure_reason(err: Exception) -> str:
-    if isinstance(err, NpcGuardError | ExecutorUnavailable):
+    if isinstance(err, LlmExecutorError | OpenAIProviderError | NpcGuardError | ExecutorUnavailable):
         return err.reason_code
     message = str(err).strip()
     if not message:
@@ -195,9 +315,53 @@ def _failure_reason(err: Exception) -> str:
 
 
 def _guard_reason(err: Exception) -> str | None:
+    if isinstance(err, LlmExecutorError):
+        return err.guard_reason
     if isinstance(err, NpcGuardError):
         return err.reason_code
     return None
+
+
+def _llm_telemetry_from_error(err: Exception) -> LlmRunTelemetry | None:
+    if isinstance(err, LlmExecutorError):
+        return err.telemetry
+    return None
+
+
+def _llm_observability_fields(
+    *,
+    settings: Settings,
+    metrics: NpcRuntimeMetrics,
+    telemetry: LlmRunTelemetry | None,
+    error_code: str | None,
+) -> dict[str, Any]:
+    return {
+        "llmErrorCode": error_code,
+        "llmLatencyMs": telemetry.latency_ms if telemetry else None,
+        "llmTokenUsage": telemetry.token_usage if telemetry else None,
+        "llmEstimatedCostMicrousd": telemetry.estimated_cost_microusd if telemetry else None,
+        "llmModel": telemetry.model if telemetry else settings.openai.model,
+        "llmProviderName": telemetry.provider_name if telemetry else settings.openai.provider_name,
+        "llmCanaryEnabled": settings.llm_runtime.canary_enabled,
+        "llmCircuitOpenUntil": metrics.current_circuit_open_until(),
+        "policyVersion": settings.npc_policy_version,
+        "promptVersion": telemetry.prompt_version if telemetry else settings.npc_prompt_version,
+    }
+
+
+def _empty_llm_telemetry(settings: Settings, *, latency_ms: int) -> LlmRunTelemetry:
+    return LlmRunTelemetry(
+        latency_ms=latency_ms,
+        token_usage=LlmTokenUsage(),
+        estimated_cost_microusd=0,
+        model=settings.openai.model,
+        provider_name=settings.openai.provider_name,
+        prompt_version=settings.npc_prompt_version,
+    )
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, round((time.perf_counter() - started) * 1000))
 
 
 def _public_call_reply(call_type: str) -> str:

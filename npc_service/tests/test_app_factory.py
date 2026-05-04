@@ -6,6 +6,7 @@ import json
 import httpx
 from app.app_factory import create_app
 from app.chat_client import NpcChatClient
+from app.executors import LlmExecutorV1, NpcExecutorRouter, RuleExecutorV1
 from app.guard import candidate_from_raw_output
 from app.models import NpcDecisionContext, NpcDecisionRun
 
@@ -53,6 +54,13 @@ def test_healthz_reports_executor_and_fallback_state() -> None:
             "executorPrimary": "llm_executor_v1",
             "llmEnabled": True,
             "llmConfigured": False,
+            "llmProviderName": "openai-compatible-test",
+            "llmModel": "test-model",
+            "llmCanaryEnabled": False,
+            "llmCanarySessionIds": [],
+            "llmCircuitFailureThreshold": 3,
+            "llmDailyCostLimitMicrousd": 0,
+            "llmRoomCostLimitMicrousd": 0,
             "ruleFallbackEnabled": True,
             "eventConsumerEnabled": False,
             "eventConsumerSource": "kafka",
@@ -75,6 +83,41 @@ def test_debate_message_event_route_can_be_disabled_for_non_local_consumer_path(
 
         assert response.status_code == 404
         assert response.json()["detail"] == "event webhook disabled"
+
+    asyncio.run(scenario())
+
+
+def test_runtime_metrics_route_requires_internal_key_and_returns_snapshot() -> None:
+    async def scenario() -> None:
+        class FakeProvider:
+            async def generate_action(self, context: NpcDecisionContext) -> dict[str, object]:
+                return {"actionType": "speak", "publicText": "继续保持节奏。"}
+
+        settings = make_settings(
+            llm_canary_enabled=True,
+            llm_canary_session_ids=(77,),
+        )
+        router = NpcExecutorRouter(
+            settings=settings,
+            llm_executor=LlmExecutorV1(settings=settings, provider=FakeProvider()),
+            rule_executor=RuleExecutorV1(settings=settings),
+        )
+        app = create_app(settings=settings, router=router)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            unauthorized = await client.get("/api/internal/npc/runtime/metrics")
+            authorized = await client.get(
+                "/api/internal/npc/runtime/metrics",
+                headers={"x-ai-internal-key": "test-internal-key"},
+            )
+
+        payload = authorized.json()
+        assert unauthorized.status_code == 401
+        assert authorized.status_code == 200
+        assert payload["llmCanaryEnabled"] is True
+        assert payload["llmCanarySessionIds"] == [77]
+        assert payload["llmModel"] == "test-model"
+        assert payload["promptVersion"] == "npc_prompt_test"
 
     asyncio.run(scenario())
 

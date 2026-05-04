@@ -4,7 +4,8 @@ import asyncio
 import json
 
 import httpx
-from app.openai_provider import OpenAICompatibleProvider
+import pytest
+from app.openai_provider import OpenAICompatibleProvider, OpenAIProviderError
 
 from helpers import make_context, make_settings
 
@@ -35,6 +36,7 @@ def test_openai_provider_posts_chat_completion_and_extracts_json_action() -> Non
                             }
                         }
                     ],
+                    "model": "provider-model",
                     "usage": {"prompt_tokens": 10, "completion_tokens": 12, "total_tokens": 22},
                 },
             )
@@ -53,5 +55,24 @@ def test_openai_provider_posts_chat_completion_and_extracts_json_action() -> Non
         assert output["actionType"] == "praise"
         assert output["targetMessageId"] == 1001
         assert output["_openaiUsage"]["total_tokens"] == 22
+        assert output["_openaiModel"] == "provider-model"
+        assert output["_openaiProviderName"] == "openai-compatible-test"
+        assert output["_openaiPromptVersion"] == "npc_prompt_test"
+
+    asyncio.run(scenario())
+
+
+def test_openai_provider_maps_rate_limit_to_reason_code() -> None:
+    async def scenario() -> None:
+        transport = httpx.MockTransport(lambda request: httpx.Response(429, text="too many"))
+        provider = OpenAICompatibleProvider(
+            make_settings(),
+            client_factory=lambda: httpx.AsyncClient(transport=transport),
+        )
+
+        with pytest.raises(OpenAIProviderError) as err:
+            await provider.generate_action(make_context())
+
+        assert err.value.reason_code == "llm_rate_limited"
 
     asyncio.run(scenario())
