@@ -42,6 +42,45 @@ export type GetOpsRbacMeOutput = {
   rbacRevision: string;
 };
 
+export type DebateNpcRoomStatus = "active" | "silent" | "manual_takeover" | "unavailable";
+
+export type DebateNpcRoomConfig = {
+  sessionId: number;
+  npcId: string;
+  displayName: string;
+  enabled: boolean;
+  personaStyle: string;
+  status: DebateNpcRoomStatus;
+  allowSpeak: boolean;
+  allowPraise: boolean;
+  allowEffect: boolean;
+  allowStateChange: boolean;
+  allowWarning: boolean;
+  allowPublicCall: boolean;
+  allowPause: boolean;
+  manualTakeoverByUserId?: number | null;
+  statusReason?: string | null;
+  updatedByUserId?: number | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type UpsertDebateNpcRoomConfigInput = {
+  npcId?: string | null;
+  displayName?: string | null;
+  enabled?: boolean;
+  personaStyle?: string | null;
+  status?: DebateNpcRoomStatus;
+  allowSpeak?: boolean;
+  allowPraise?: boolean;
+  allowEffect?: boolean;
+  allowStateChange?: boolean;
+  allowWarning?: boolean;
+  allowPublicCall?: boolean;
+  allowPause?: boolean;
+  statusReason?: string | null;
+};
+
 export type OpsRoleAssignment = {
   userId: number;
   userEmail: string;
@@ -397,6 +436,28 @@ export function toOpsDomainError(error: unknown): string {
 
 export async function getOpsRbacMe(): Promise<GetOpsRbacMeOutput> {
   const response = await http.get<GetOpsRbacMeOutput>("/debate/ops/rbac/me");
+  return response.data;
+}
+
+export async function getOpsDebateNpcRoomConfig(
+  sessionId: number
+): Promise<DebateNpcRoomConfig> {
+  const normalizedSessionId = Math.floor(Number(sessionId) || 0);
+  const response = await http.get<DebateNpcRoomConfig>(
+    `/debate/ops/npc/sessions/${normalizedSessionId}/config`
+  );
+  return response.data;
+}
+
+export async function upsertOpsDebateNpcRoomConfig(
+  sessionId: number,
+  input: UpsertDebateNpcRoomConfigInput
+): Promise<DebateNpcRoomConfig> {
+  const normalizedSessionId = Math.floor(Number(sessionId) || 0);
+  const response = await http.put<DebateNpcRoomConfig>(
+    `/debate/ops/npc/sessions/${normalizedSessionId}/config`,
+    input
+  );
   return response.data;
 }
 

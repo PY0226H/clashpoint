@@ -3,6 +3,16 @@ use serde_json::{json, Value};
 
 const NPC_ID: &str = "virtual_judge_default";
 
+#[derive(Debug, Clone, Copy)]
+struct SeedNpcConfig {
+    enabled: bool,
+    status: &'static str,
+    allow_speak: bool,
+    allow_praise: bool,
+    allow_effect: bool,
+    allow_state_change: bool,
+}
+
 #[tokio::test]
 async fn npc_unavailable_should_not_block_debate_message_creation() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
@@ -50,6 +60,8 @@ async fn npc_decision_context_should_return_public_room_messages_only() -> Resul
 
     assert_eq!(context.session_id, session_id as u64);
     assert_eq!(context.npc_id, NPC_ID);
+    assert!(!context.room_config.enabled);
+    assert_eq!(context.room_config.status, "unavailable");
     assert_eq!(context.source_event_id.as_deref(), Some("evt-message-2"));
     assert_eq!(context.trigger_message.message_id, second.id);
     assert_eq!(context.trigger_message.content, "second public point");
@@ -173,6 +185,184 @@ async fn npc_action_candidate_should_reject_disabled_room_npc() -> Result<()> {
 }
 
 #[tokio::test]
+async fn npc_action_candidate_should_reject_non_active_room_status() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
+    seed_npc_config_with_status(
+        &state,
+        session_id,
+        SeedNpcConfig {
+            enabled: true,
+            status: "manual_takeover",
+            allow_speak: true,
+            allow_praise: true,
+            allow_effect: true,
+            allow_state_change: true,
+        },
+    )
+    .await?;
+    let message = seed_joined_message(&state, session_id, 1, "pro", "opening").await?;
+
+    let output = state
+        .submit_debate_npc_action_candidate(praise_candidate(
+            "npc-act-manual-takeover",
+            session_id,
+            message.id,
+            "这句不错。",
+        ))
+        .await?;
+
+    assert!(!output.accepted);
+    assert_eq!(output.status, "rejected");
+    assert_eq!(output.reason_code.as_deref(), Some("npc_status_blocked"));
+    assert_eq!(npc_action_count(&state).await?, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn npc_action_candidate_should_reject_disabled_state_change_capability() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
+    seed_npc_config_with_status(
+        &state,
+        session_id,
+        SeedNpcConfig {
+            enabled: true,
+            status: "active",
+            allow_speak: true,
+            allow_praise: true,
+            allow_effect: true,
+            allow_state_change: false,
+        },
+    )
+    .await?;
+
+    let output = state
+        .submit_debate_npc_action_candidate(state_changed_candidate(
+            "npc-act-state-disabled",
+            session_id,
+            "silent",
+        ))
+        .await?;
+
+    assert!(!output.accepted);
+    assert_eq!(
+        output.reason_code.as_deref(),
+        Some("npc_capability_disabled")
+    );
+    assert_eq!(npc_action_count(&state).await?, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn ops_npc_config_should_publish_manual_takeover_state_change() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
+    state.grant_platform_admin(1).await?;
+    let owner = state
+        .find_user_by_id(1)
+        .await?
+        .expect("fixture user should exist");
+
+    let config = state
+        .upsert_debate_npc_room_config_by_ops(
+            &owner,
+            session_id as u64,
+            UpsertDebateNpcRoomConfigInput {
+                npc_id: None,
+                display_name: None,
+                enabled: Some(true),
+                persona_style: Some("energetic_host".to_string()),
+                status: Some("manual_takeover".to_string()),
+                allow_speak: Some(true),
+                allow_praise: Some(false),
+                allow_effect: Some(false),
+                allow_state_change: Some(true),
+                allow_warning: Some(true),
+                allow_public_call: Some(false),
+                allow_pause: Some(false),
+                status_reason: Some("ops_takeover".to_string()),
+            },
+        )
+        .await?;
+
+    assert_eq!(config.status, "manual_takeover");
+    assert_eq!(config.manual_takeover_by_user_id, Some(owner.id));
+    assert!(!config.allow_praise);
+    assert!(!config.allow_effect);
+    let stored: DebateNpcAction = sqlx::query_as(
+        r#"
+        SELECT
+          id, action_uid, session_id, npc_id, display_name, action_type, public_text,
+          target_message_id, target_user_id, target_side, effect_kind, npc_status,
+          reason_code, source_event_id, source_message_id, policy_version,
+          executor_kind, executor_version, created_at
+        FROM debate_npc_actions
+        WHERE session_id = $1 AND action_type = 'state_changed'
+        "#,
+    )
+    .bind(session_id)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(stored.npc_status.as_deref(), Some("manual_takeover"));
+    assert_eq!(stored.executor_kind, "ops_control_plane");
+    assert_eq!(
+        stored.public_text.as_deref(),
+        Some("虚拟裁判已进入人工接管状态。")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn ops_npc_config_should_disable_praise_candidate_at_chat_boundary() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
+    state.grant_platform_admin(1).await?;
+    let owner = state
+        .find_user_by_id(1)
+        .await?
+        .expect("fixture user should exist");
+    state
+        .upsert_debate_npc_room_config_by_ops(
+            &owner,
+            session_id as u64,
+            UpsertDebateNpcRoomConfigInput {
+                npc_id: None,
+                display_name: None,
+                enabled: Some(true),
+                persona_style: None,
+                status: Some("active".to_string()),
+                allow_speak: Some(true),
+                allow_praise: Some(false),
+                allow_effect: Some(false),
+                allow_state_change: Some(true),
+                allow_warning: Some(true),
+                allow_public_call: Some(false),
+                allow_pause: Some(false),
+                status_reason: None,
+            },
+        )
+        .await?;
+    let message = seed_joined_message(&state, session_id, 1, "pro", "sharp point").await?;
+
+    let output = state
+        .submit_debate_npc_action_candidate(praise_candidate(
+            "npc-act-praise-disabled-by-ops",
+            session_id,
+            message.id,
+            "这句不错。",
+        ))
+        .await?;
+
+    assert!(!output.accepted);
+    assert_eq!(
+        output.reason_code.as_deref(),
+        Some("npc_capability_disabled")
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn npc_action_candidate_should_reject_target_message_from_other_session() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
     let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
@@ -262,20 +452,43 @@ async fn seed_npc_config(
     allow_praise: bool,
     allow_effect: bool,
 ) -> Result<()> {
+    seed_npc_config_with_status(
+        state,
+        session_id,
+        SeedNpcConfig {
+            enabled,
+            status: "active",
+            allow_speak,
+            allow_praise,
+            allow_effect,
+            allow_state_change: true,
+        },
+    )
+    .await
+}
+
+async fn seed_npc_config_with_status(
+    state: &AppState,
+    session_id: i64,
+    config: SeedNpcConfig,
+) -> Result<()> {
     sqlx::query(
         r#"
         INSERT INTO debate_npc_room_configs(
-          session_id, npc_id, display_name, enabled, allow_speak, allow_praise, allow_effect
+          session_id, npc_id, display_name, enabled, status,
+          allow_speak, allow_praise, allow_effect, allow_state_change
         )
-        VALUES ($1, $2, '虚拟裁判', $3, $4, $5, $6)
+        VALUES ($1, $2, '虚拟裁判', $3, $4, $5, $6, $7, $8)
         "#,
     )
     .bind(session_id)
     .bind(NPC_ID)
-    .bind(enabled)
-    .bind(allow_speak)
-    .bind(allow_praise)
-    .bind(allow_effect)
+    .bind(config.enabled)
+    .bind(config.status)
+    .bind(config.allow_speak)
+    .bind(config.allow_praise)
+    .bind(config.allow_effect)
+    .bind(config.allow_state_change)
     .execute(&state.pool)
     .await?;
     Ok(())
@@ -335,6 +548,20 @@ fn speak_candidate(action_uid: &str, session_id: i64, text: &str) -> Value {
         "npcId": NPC_ID,
         "actionType": "speak",
         "publicText": text,
+        "policyVersion": "npc-mvp-v1",
+        "executorKind": "llm_executor_v1",
+        "executorVersion": "gpt-4.1-mini"
+    })
+}
+
+fn state_changed_candidate(action_uid: &str, session_id: i64, status: &str) -> Value {
+    json!({
+        "actionUid": action_uid,
+        "sessionId": session_id as u64,
+        "npcId": NPC_ID,
+        "actionType": "state_changed",
+        "publicText": "状态更新。",
+        "npcStatus": status,
         "policyVersion": "npc-mvp-v1",
         "executorKind": "llm_executor_v1",
         "executorVersion": "gpt-4.1-mini"

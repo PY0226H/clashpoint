@@ -101,6 +101,9 @@ export type ListDebateMessagesOutput = {
   hasMore: boolean;
   nextCursor?: number | null;
   revision: string;
+  viewerRole?: "participant" | "spectator" | string;
+  viewerSide?: DebateSide | null;
+  canSendMessage?: boolean;
 };
 
 export type ListDebatePinnedMessagesOutput = {

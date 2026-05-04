@@ -90,6 +90,7 @@ const DEBATE_NPC_ACTION_FIELD_TOO_LONG: &str = "debate_npc_action_field_too_long
 const DEBATE_NPC_ACTION_INVALID_PAYLOAD: &str = "debate_npc_action_invalid_payload";
 const DEBATE_NPC_ACTION_DISABLED: &str = "npc_disabled";
 const DEBATE_NPC_ACTION_CAPABILITY_DISABLED: &str = "npc_capability_disabled";
+const DEBATE_NPC_ACTION_STATUS_BLOCKED: &str = "npc_status_blocked";
 const DEBATE_NPC_ACTION_TARGET_MESSAGE_MISMATCH: &str = "npc_target_message_mismatch";
 const DEBATE_NPC_ACTION_TARGET_USER_MISMATCH: &str = "npc_target_user_mismatch";
 const DEBATE_NPC_ACTION_TARGET_SIDE_MISMATCH: &str = "npc_target_side_mismatch";
@@ -102,6 +103,19 @@ const DEBATE_NPC_ACTION_ROOM_MIN_INTERVAL_SECS: i64 = 3;
 const DEBATE_NPC_ACTION_ROOM_MAX_PER_MINUTE: i64 = 10;
 const DEBATE_NPC_ACTION_TARGET_USER_PRAISE_MIN_INTERVAL_SECS: i64 = 30;
 const DEBATE_NPC_DEFAULT_ID: &str = "virtual_judge_default";
+const DEBATE_NPC_DEFAULT_DISPLAY_NAME: &str = "虚拟裁判";
+const DEBATE_NPC_DEFAULT_PERSONA_STYLE: &str = "balanced_host";
+const DEBATE_NPC_STATUS_ACTIVE: &str = "active";
+const DEBATE_NPC_STATUS_SILENT: &str = "silent";
+const DEBATE_NPC_STATUS_MANUAL_TAKEOVER: &str = "manual_takeover";
+const DEBATE_NPC_STATUS_UNAVAILABLE: &str = "unavailable";
+const DEBATE_NPC_CONFIG_INVALID_STATUS: &str = "debate_npc_config_status_invalid";
+const DEBATE_NPC_CONFIG_DISPLAY_NAME_EMPTY: &str = "debate_npc_config_display_name_empty";
+const DEBATE_NPC_CONFIG_DISPLAY_NAME_TOO_LONG: &str = "debate_npc_config_display_name_too_long";
+const DEBATE_NPC_CONFIG_PERSONA_STYLE_EMPTY: &str = "debate_npc_config_persona_style_empty";
+const DEBATE_NPC_CONFIG_PERSONA_STYLE_TOO_LONG: &str = "debate_npc_config_persona_style_too_long";
+const DEBATE_NPC_CONFIG_STATUS_REASON_TOO_LONG: &str = "debate_npc_config_status_reason_too_long";
+const DEBATE_NPC_CONFIG_SESSION_INVALID: &str = "debate_npc_config_session_invalid";
 const DEBATE_NPC_CONTEXT_DEFAULT_LIMIT: u64 = 20;
 const DEBATE_NPC_CONTEXT_MAX_LIMIT: u64 = 50;
 const DEBATE_NPC_CONTEXT_INVALID_SESSION_ID: &str = "debate_npc_context_invalid_session_id";
@@ -273,6 +287,9 @@ pub struct ListDebateMessagesOutput {
     pub has_more: bool,
     pub next_cursor: Option<u64>,
     pub revision: String,
+    pub viewer_role: String,
+    pub viewer_side: Option<String>,
+    pub can_send_message: bool,
 }
 
 #[derive(Debug, Clone, IntoParams, ToSchema, Serialize, Deserialize)]
@@ -333,6 +350,47 @@ pub struct DebateNpcAction {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, FromRow, ToSchema, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DebateNpcRoomConfig {
+    pub session_id: i64,
+    pub npc_id: String,
+    pub display_name: String,
+    pub enabled: bool,
+    pub persona_style: String,
+    pub status: String,
+    pub allow_speak: bool,
+    pub allow_praise: bool,
+    pub allow_effect: bool,
+    pub allow_state_change: bool,
+    pub allow_warning: bool,
+    pub allow_public_call: bool,
+    pub allow_pause: bool,
+    pub manual_takeover_by_user_id: Option<i64>,
+    pub status_reason: Option<String>,
+    pub updated_by_user_id: Option<i64>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpsertDebateNpcRoomConfigInput {
+    pub npc_id: Option<String>,
+    pub display_name: Option<String>,
+    pub enabled: Option<bool>,
+    pub persona_style: Option<String>,
+    pub status: Option<String>,
+    pub allow_speak: Option<bool>,
+    pub allow_praise: Option<bool>,
+    pub allow_effect: Option<bool>,
+    pub allow_state_change: Option<bool>,
+    pub allow_warning: Option<bool>,
+    pub allow_public_call: Option<bool>,
+    pub allow_pause: Option<bool>,
+    pub status_reason: Option<String>,
+}
+
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SubmitDebateNpcActionCandidateInput {
@@ -389,6 +447,7 @@ pub struct DebateNpcMessageSnapshot {
 pub struct GetDebateNpcDecisionContextOutput {
     pub session_id: u64,
     pub npc_id: String,
+    pub room_config: DebateNpcRoomConfig,
     pub source_event_id: Option<String>,
     pub trigger_message: DebateNpcMessageSnapshot,
     pub recent_messages: Vec<DebateNpcMessageSnapshot>,

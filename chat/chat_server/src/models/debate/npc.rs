@@ -1,14 +1,6 @@
 use super::*;
+use crate::models::OpsPermission;
 use serde_json::Value;
-
-#[derive(Debug, FromRow)]
-struct NpcRoomConfigRow {
-    display_name: String,
-    enabled: bool,
-    allow_speak: bool,
-    allow_praise: bool,
-    allow_effect: bool,
-}
 
 #[derive(Debug, FromRow)]
 struct NpcMessageTargetRow {
@@ -64,14 +56,144 @@ impl AppState {
             limit,
         )
         .await?;
+        let room_config =
+            load_npc_room_config_pool(&self.pool, session_id_i64, DEBATE_NPC_DEFAULT_ID)
+                .await?
+                .unwrap_or_else(|| default_npc_room_config(session_id_i64, DEBATE_NPC_DEFAULT_ID));
         Ok(GetDebateNpcDecisionContextOutput {
             session_id,
             npc_id: DEBATE_NPC_DEFAULT_ID.to_string(),
+            room_config,
             source_event_id: query.source_event_id,
             trigger_message,
             recent_messages,
             now: Utc::now(),
         })
+    }
+
+    pub async fn get_debate_npc_room_config_by_ops(
+        &self,
+        user: &User,
+        session_id: u64,
+        npc_id: Option<String>,
+    ) -> Result<DebateNpcRoomConfig, AppError> {
+        self.ensure_ops_permission(user, OpsPermission::DebateManage)
+            .await?;
+        let session_id_i64 = safe_u64_to_i64(session_id, DEBATE_NPC_CONFIG_SESSION_INVALID)?;
+        let npc_id = normalize_npc_config_id(npc_id)?;
+        ensure_debate_session_exists_pool(&self.pool, session_id_i64).await?;
+        Ok(
+            load_npc_room_config_pool(&self.pool, session_id_i64, &npc_id)
+                .await?
+                .unwrap_or_else(|| default_npc_room_config(session_id_i64, &npc_id)),
+        )
+    }
+
+    pub async fn upsert_debate_npc_room_config_by_ops(
+        &self,
+        user: &User,
+        session_id: u64,
+        input: UpsertDebateNpcRoomConfigInput,
+    ) -> Result<DebateNpcRoomConfig, AppError> {
+        self.ensure_ops_permission(user, OpsPermission::DebateManage)
+            .await?;
+        let session_id_i64 = safe_u64_to_i64(session_id, DEBATE_NPC_CONFIG_SESSION_INVALID)?;
+        let npc_id = normalize_npc_config_id(input.npc_id)?;
+
+        let mut tx = self.pool.begin().await?;
+        ensure_debate_session_exists_tx(&mut tx, session_id_i64).await?;
+        let current = load_npc_room_config(&mut tx, session_id_i64, &npc_id).await?;
+        let base = current
+            .clone()
+            .unwrap_or_else(|| default_npc_room_config(session_id_i64, &npc_id));
+
+        let enabled = input.enabled.unwrap_or(base.enabled);
+        let display_name = normalize_npc_config_text_or_current(
+            input.display_name,
+            base.display_name.clone(),
+            64,
+            DEBATE_NPC_CONFIG_DISPLAY_NAME_EMPTY,
+            DEBATE_NPC_CONFIG_DISPLAY_NAME_TOO_LONG,
+        )?;
+        let persona_style = normalize_npc_config_text_or_current(
+            input.persona_style,
+            base.persona_style.clone(),
+            64,
+            DEBATE_NPC_CONFIG_PERSONA_STYLE_EMPTY,
+            DEBATE_NPC_CONFIG_PERSONA_STYLE_TOO_LONG,
+        )?;
+        let status = normalize_next_npc_config_status(input.status, input.enabled, &base)?;
+        let current_status_reason = current
+            .as_ref()
+            .and_then(|config| config.status_reason.clone());
+        let status_reason =
+            normalize_npc_config_reason(input.status_reason, current_status_reason)?;
+        let manual_takeover_by_user_id = if status == DEBATE_NPC_STATUS_MANUAL_TAKEOVER {
+            Some(user.id)
+        } else {
+            None
+        };
+
+        let config = sqlx::query_as::<_, DebateNpcRoomConfig>(
+            r#"
+            INSERT INTO debate_npc_room_configs(
+              session_id, npc_id, display_name, enabled, persona_style, status,
+              allow_speak, allow_praise, allow_effect, allow_state_change,
+              allow_warning, allow_public_call, allow_pause, manual_takeover_by_user_id,
+              status_reason, updated_by_user_id
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+            ON CONFLICT (session_id, npc_id) DO UPDATE
+            SET
+              display_name = EXCLUDED.display_name,
+              enabled = EXCLUDED.enabled,
+              persona_style = EXCLUDED.persona_style,
+              status = EXCLUDED.status,
+              allow_speak = EXCLUDED.allow_speak,
+              allow_praise = EXCLUDED.allow_praise,
+              allow_effect = EXCLUDED.allow_effect,
+              allow_state_change = EXCLUDED.allow_state_change,
+              allow_warning = EXCLUDED.allow_warning,
+              allow_public_call = EXCLUDED.allow_public_call,
+              allow_pause = EXCLUDED.allow_pause,
+              manual_takeover_by_user_id = EXCLUDED.manual_takeover_by_user_id,
+              status_reason = EXCLUDED.status_reason,
+              updated_by_user_id = EXCLUDED.updated_by_user_id,
+              updated_at = NOW()
+            RETURNING
+              session_id, npc_id, display_name, enabled, persona_style, status,
+              allow_speak, allow_praise, allow_effect, allow_state_change,
+              allow_warning, allow_public_call, allow_pause, manual_takeover_by_user_id,
+              status_reason, updated_by_user_id, created_at, updated_at
+            "#,
+        )
+        .bind(session_id_i64)
+        .bind(&npc_id)
+        .bind(&display_name)
+        .bind(enabled)
+        .bind(&persona_style)
+        .bind(&status)
+        .bind(input.allow_speak.unwrap_or(base.allow_speak))
+        .bind(input.allow_praise.unwrap_or(base.allow_praise))
+        .bind(input.allow_effect.unwrap_or(base.allow_effect))
+        .bind(input.allow_state_change.unwrap_or(base.allow_state_change))
+        .bind(input.allow_warning.unwrap_or(base.allow_warning))
+        .bind(input.allow_public_call.unwrap_or(base.allow_public_call))
+        .bind(input.allow_pause.unwrap_or(base.allow_pause))
+        .bind(manual_takeover_by_user_id)
+        .bind(&status_reason)
+        .bind(user.id)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        if should_emit_npc_config_state_change(current.as_ref(), &config) {
+            let action = insert_ops_npc_state_changed_action(&mut tx, &config).await?;
+            self.enqueue_npc_action_created_in_tx(&mut tx, &action)
+                .await?;
+        }
+
+        tx.commit().await?;
+        Ok(config)
     }
 
     pub async fn submit_debate_npc_action_candidate(
@@ -127,6 +249,13 @@ impl AppState {
             return Ok(rejected_candidate(
                 candidate.action_uid,
                 DEBATE_NPC_ACTION_DISABLED,
+            ));
+        }
+        if config.status != DEBATE_NPC_STATUS_ACTIVE {
+            tx.commit().await?;
+            return Ok(rejected_candidate(
+                candidate.action_uid,
+                DEBATE_NPC_ACTION_STATUS_BLOCKED,
             ));
         }
         if !is_action_capability_enabled(&config, &candidate.action_type) {
@@ -216,9 +345,27 @@ impl AppState {
 
         let action = insert_npc_action(&mut tx, &candidate, &config.display_name).await?;
 
+        self.enqueue_npc_action_created_in_tx(&mut tx, &action)
+            .await?;
+
+        tx.commit().await?;
+        Ok(SubmitDebateNpcActionCandidateOutput {
+            accepted: true,
+            action_id: Some(action.id as u64),
+            action_uid: action.action_uid,
+            status: "created".to_string(),
+            reason_code: None,
+        })
+    }
+
+    async fn enqueue_npc_action_created_in_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        action: &DebateNpcAction,
+    ) -> Result<(), AppError> {
         self.event_bus
             .enqueue_in_tx(
-                &mut tx,
+                tx,
                 DomainEvent::DebateNpcActionCreated(DebateNpcActionCreatedEvent {
                     action_id: action.id as u64,
                     action_uid: action.action_uid.clone(),
@@ -245,16 +392,8 @@ impl AppState {
                     err
                 );
                 AppError::ServerError(DEBATE_NPC_ACTION_OUTBOX_ENQUEUE_FAILED.to_string())
-            })?;
-
-        tx.commit().await?;
-        Ok(SubmitDebateNpcActionCandidateOutput {
-            accepted: true,
-            action_id: Some(action.id as u64),
-            action_uid: action.action_uid,
-            status: "created".to_string(),
-            reason_code: None,
-        })
+            })
+            .map(|_| ())
     }
 }
 
@@ -345,10 +484,14 @@ async fn load_npc_room_config(
     tx: &mut Transaction<'_, Postgres>,
     session_id: i64,
     npc_id: &str,
-) -> Result<Option<NpcRoomConfigRow>, AppError> {
-    let config = sqlx::query_as::<_, NpcRoomConfigRow>(
+) -> Result<Option<DebateNpcRoomConfig>, AppError> {
+    let config = sqlx::query_as::<_, DebateNpcRoomConfig>(
         r#"
-        SELECT display_name, enabled, allow_speak, allow_praise, allow_effect
+        SELECT
+          session_id, npc_id, display_name, enabled, persona_style, status,
+          allow_speak, allow_praise, allow_effect, allow_state_change,
+          allow_warning, allow_public_call, allow_pause, manual_takeover_by_user_id,
+          status_reason, updated_by_user_id, created_at, updated_at
         FROM debate_npc_room_configs
         WHERE session_id = $1 AND npc_id = $2
         "#,
@@ -358,6 +501,219 @@ async fn load_npc_room_config(
     .fetch_optional(&mut **tx)
     .await?;
     Ok(config)
+}
+
+async fn load_npc_room_config_pool(
+    pool: &sqlx::PgPool,
+    session_id: i64,
+    npc_id: &str,
+) -> Result<Option<DebateNpcRoomConfig>, AppError> {
+    let config = sqlx::query_as::<_, DebateNpcRoomConfig>(
+        r#"
+        SELECT
+          session_id, npc_id, display_name, enabled, persona_style, status,
+          allow_speak, allow_praise, allow_effect, allow_state_change,
+          allow_warning, allow_public_call, allow_pause, manual_takeover_by_user_id,
+          status_reason, updated_by_user_id, created_at, updated_at
+        FROM debate_npc_room_configs
+        WHERE session_id = $1 AND npc_id = $2
+        "#,
+    )
+    .bind(session_id)
+    .bind(npc_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(config)
+}
+
+fn default_npc_room_config(session_id: i64, npc_id: &str) -> DebateNpcRoomConfig {
+    let now = Utc::now();
+    DebateNpcRoomConfig {
+        session_id,
+        npc_id: npc_id.to_string(),
+        display_name: DEBATE_NPC_DEFAULT_DISPLAY_NAME.to_string(),
+        enabled: false,
+        persona_style: DEBATE_NPC_DEFAULT_PERSONA_STYLE.to_string(),
+        status: DEBATE_NPC_STATUS_UNAVAILABLE.to_string(),
+        allow_speak: true,
+        allow_praise: true,
+        allow_effect: true,
+        allow_state_change: true,
+        allow_warning: true,
+        allow_public_call: false,
+        allow_pause: false,
+        manual_takeover_by_user_id: None,
+        status_reason: Some("npc_config_missing".to_string()),
+        updated_by_user_id: None,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+async fn ensure_debate_session_exists_pool(
+    pool: &sqlx::PgPool,
+    session_id: i64,
+) -> Result<(), AppError> {
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM debate_sessions WHERE id = $1)")
+            .bind(session_id)
+            .fetch_one(pool)
+            .await?;
+    if !exists {
+        return Err(AppError::NotFound(format!(
+            "debate session id {session_id}"
+        )));
+    }
+    Ok(())
+}
+
+async fn ensure_debate_session_exists_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    session_id: i64,
+) -> Result<(), AppError> {
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM debate_sessions WHERE id = $1)")
+            .bind(session_id)
+            .fetch_one(&mut **tx)
+            .await?;
+    if !exists {
+        return Err(AppError::NotFound(format!(
+            "debate session id {session_id}"
+        )));
+    }
+    Ok(())
+}
+
+fn normalize_npc_config_id(raw: Option<String>) -> Result<String, AppError> {
+    match raw {
+        Some(value) => {
+            normalize_required_text(value, 64, DEBATE_NPC_ID_EMPTY, DEBATE_NPC_ID_TOO_LONG)
+        }
+        None => Ok(DEBATE_NPC_DEFAULT_ID.to_string()),
+    }
+}
+
+fn normalize_npc_config_text_or_current(
+    raw: Option<String>,
+    current: String,
+    max_len: usize,
+    empty_code: &'static str,
+    too_long_code: &'static str,
+) -> Result<String, AppError> {
+    match raw {
+        Some(value) => normalize_required_text(value, max_len, empty_code, too_long_code),
+        None => Ok(current),
+    }
+}
+
+fn normalize_next_npc_config_status(
+    raw: Option<String>,
+    enabled_input: Option<bool>,
+    base: &DebateNpcRoomConfig,
+) -> Result<String, AppError> {
+    if let Some(value) = raw {
+        return normalize_npc_config_status(value);
+    }
+    if enabled_input == Some(false) {
+        return Ok(DEBATE_NPC_STATUS_UNAVAILABLE.to_string());
+    }
+    if enabled_input == Some(true) && base.status == DEBATE_NPC_STATUS_UNAVAILABLE {
+        return Ok(DEBATE_NPC_STATUS_ACTIVE.to_string());
+    }
+    Ok(base.status.clone())
+}
+
+fn normalize_npc_config_status(raw: String) -> Result<String, AppError> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    if matches!(
+        normalized.as_str(),
+        DEBATE_NPC_STATUS_ACTIVE
+            | DEBATE_NPC_STATUS_SILENT
+            | DEBATE_NPC_STATUS_MANUAL_TAKEOVER
+            | DEBATE_NPC_STATUS_UNAVAILABLE
+    ) {
+        return Ok(normalized);
+    }
+    Err(AppError::ValidationError(
+        DEBATE_NPC_CONFIG_INVALID_STATUS.to_string(),
+    ))
+}
+
+fn normalize_npc_config_reason(
+    raw: Option<String>,
+    current: Option<String>,
+) -> Result<Option<String>, AppError> {
+    let Some(value) = raw else {
+        return Ok(current);
+    };
+    let normalized = value.trim().to_string();
+    if normalized.is_empty() {
+        return Ok(None);
+    }
+    if normalized.chars().count() > 128 {
+        return Err(AppError::ValidationError(
+            DEBATE_NPC_CONFIG_STATUS_REASON_TOO_LONG.to_string(),
+        ));
+    }
+    Ok(Some(normalized))
+}
+
+fn should_emit_npc_config_state_change(
+    current: Option<&DebateNpcRoomConfig>,
+    next: &DebateNpcRoomConfig,
+) -> bool {
+    match current {
+        Some(current) => current.enabled != next.enabled || current.status != next.status,
+        None => next.enabled || next.status != DEBATE_NPC_STATUS_UNAVAILABLE,
+    }
+}
+
+async fn insert_ops_npc_state_changed_action(
+    tx: &mut Transaction<'_, Postgres>,
+    config: &DebateNpcRoomConfig,
+) -> Result<DebateNpcAction, AppError> {
+    let state_status = if config.enabled {
+        config.status.clone()
+    } else {
+        DEBATE_NPC_STATUS_UNAVAILABLE.to_string()
+    };
+    let candidate = NormalizedNpcActionCandidate {
+        action_uid: format!(
+            "ops-state:{}:{}:{}",
+            config.session_id,
+            config.npc_id,
+            Utc::now().timestamp_micros()
+        ),
+        session_id: config.session_id,
+        npc_id: config.npc_id.clone(),
+        action_type: "state_changed".to_string(),
+        public_text: Some(ops_npc_state_public_text(config)),
+        target_message_id: None,
+        target_user_id: None,
+        target_side: None,
+        effect_kind: None,
+        npc_status: Some(state_status),
+        reason_code: Some("ops_npc_state_changed".to_string()),
+        source_event_id: None,
+        source_message_id: None,
+        policy_version: "npc-ops-v1".to_string(),
+        executor_kind: "ops_control_plane".to_string(),
+        executor_version: "ops_control_plane_v1".to_string(),
+    };
+    insert_npc_action(tx, &candidate, &config.display_name).await
+}
+
+fn ops_npc_state_public_text(config: &DebateNpcRoomConfig) -> String {
+    if !config.enabled {
+        return "虚拟裁判已关闭，暂时不会在本场辩论中发言。".to_string();
+    }
+    match config.status.as_str() {
+        DEBATE_NPC_STATUS_ACTIVE => "虚拟裁判已恢复现场观察。".to_string(),
+        DEBATE_NPC_STATUS_SILENT => "虚拟裁判已进入静默观察状态。".to_string(),
+        DEBATE_NPC_STATUS_MANUAL_TAKEOVER => "虚拟裁判已进入人工接管状态。".to_string(),
+        DEBATE_NPC_STATUS_UNAVAILABLE => "虚拟裁判暂时不可用。".to_string(),
+        _ => "虚拟裁判状态已更新。".to_string(),
+    }
 }
 
 async fn load_message_target(
@@ -665,12 +1021,12 @@ fn normalize_optional_text(
     Ok(Some(normalized))
 }
 
-fn is_action_capability_enabled(config: &NpcRoomConfigRow, action_type: &str) -> bool {
+fn is_action_capability_enabled(config: &DebateNpcRoomConfig, action_type: &str) -> bool {
     match action_type {
         "speak" => config.allow_speak,
         "praise" => config.allow_praise,
         "effect" => config.allow_effect,
-        "state_changed" => true,
+        "state_changed" => config.allow_state_change,
         _ => false,
     }
 }

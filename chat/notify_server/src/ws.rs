@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     middlewares::{notify_error_response, NotifyWsSubprotocol},
-    AppState, DebateReplayEvent, UserEvent,
+    AppState, DebateReplayEvent, DebateRoomAccess, UserEvent,
 };
 use axum::{
     extract::{
@@ -157,10 +157,7 @@ pub(crate) async fn debate_room_ws_handler(
 ) -> Response {
     let user_id = user.id as u64;
     let request_id = extract_request_id(&headers);
-    let is_participant = match state
-        .is_debate_session_participant(user_id, session_id)
-        .await
-    {
+    let access = match state.debate_room_realtime_access(user_id, session_id).await {
         Ok(v) => v,
         Err(err) => {
             warn!(
@@ -168,24 +165,24 @@ pub(crate) async fn debate_room_ws_handler(
                 user_id,
                 session_id,
                 err = %err,
-                "debate room membership check failed"
+                "debate room realtime access check failed"
             );
             return notify_error_response(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "notify_debate_membership_check_failed",
-                "failed to verify debate room membership",
+                "notify_debate_room_access_check_failed",
+                "failed to verify debate room access",
                 request_id,
             );
         }
     };
-    if !is_participant {
+    let Some(access) = access else {
         return notify_error_response(
             StatusCode::FORBIDDEN,
             "notify_debate_session_forbidden",
-            "user is not a participant of this debate session",
+            "user cannot read this debate session",
             request_id,
         );
-    }
+    };
     if !state.try_acquire_debate_ws_connection(user_id, session_id) {
         return notify_error_response(
             StatusCode::TOO_MANY_REQUESTS,
@@ -204,6 +201,10 @@ pub(crate) async fn debate_room_ws_handler(
         request_id,
         user_id,
         session_id,
+        access = match access {
+            DebateRoomAccess::Participant => "participant",
+            DebateRoomAccess::Spectator => "spectator",
+        },
         requested_last_ack_seq = query.last_ack_seq.unwrap_or(0),
         debate_ws_connected_total = debate_ws_snapshot.connected_total,
         "user subscribed via debate room websocket"
@@ -1053,7 +1054,7 @@ mod tests {
     use crate::{
         config::{AuthConfig, ServerConfig},
         middlewares::verify_notify_ticket,
-        notif::DebateParticipantJoined,
+        notif::{DebateNpcActionCreated, DebateParticipantJoined},
         AppConfig, AppEvent,
     };
     use anyhow::Result;
@@ -1482,6 +1483,87 @@ mod tests {
             .and_then(|v| v.as_i64())
             .expect("room event payload should carry session id");
         assert_eq!(payload_session_id, 12);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn debate_room_ws_handler_should_allow_readonly_spectator_to_receive_npc_action(
+    ) -> Result<()> {
+        let state = test_state();
+        let ek = EncodingKey::load(include_str!("../../chat_core/fixtures/encoding.pem"))?;
+        let spectator = chat_core::User::new(3, "Spectator", "spectator@acme.org");
+        let notify_ticket = ek.sign_notify_ticket(spectator, 300)?;
+        state.mark_debate_room_read_access(3, 12);
+
+        let app = Router::new()
+            .route("/ws/debate/:session_id", get(debate_room_ws_handler))
+            .layer(from_fn_with_state(state.clone(), verify_notify_ticket))
+            .with_state(state.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let (mut socket,) = connect_debate_ws(addr, 12, &notify_ticket, None).await?;
+        let welcome = tokio::time::timeout(Duration::from_secs(2), socket.next()).await?;
+        let welcome_text = welcome
+            .expect("should receive welcome message")
+            .expect("welcome message should be ws ok")
+            .into_text()?
+            .to_string();
+        let welcome_json: serde_json::Value = serde_json::from_str(&welcome_text)?;
+        assert_eq!(welcome_json["type"], "welcome");
+
+        for _ in 0..40 {
+            if state.users.contains_key(&3) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        let tx = state.users.get(&3).expect("spectator channel should exist");
+        let action = DebateNpcActionCreated {
+            action_id: 301,
+            action_uid: "npc-action-spectator-301".to_string(),
+            session_id: 12,
+            npc_id: "virtual_judge_default".to_string(),
+            display_name: "虚拟裁判".to_string(),
+            action_type: "praise".to_string(),
+            public_text: Some("这段追问很精彩。".to_string()),
+            target_message_id: Some(100),
+            target_user_id: Some(7),
+            target_side: Some("pro".to_string()),
+            effect_kind: Some("sparkle".to_string()),
+            npc_status: Some("praising".to_string()),
+            reason_code: Some("spectator_visible_npc_action".to_string()),
+            created_at: Utc::now(),
+        };
+        let user_event = state.build_user_event_for_debate_viewer(
+            3,
+            Arc::new(AppEvent::DebateNpcActionCreated(action)),
+            None,
+        );
+        tx.send(Arc::new(user_event))?;
+
+        let room_msg = tokio::time::timeout(Duration::from_secs(2), socket.next()).await?;
+        let room_text = room_msg
+            .expect("spectator should receive npc action")
+            .expect("npc action should be ws ok")
+            .into_text()?
+            .to_string();
+        let room_json: serde_json::Value = serde_json::from_str(&room_text)?;
+        assert_eq!(room_json["type"], "roomEvent");
+        let event_name = room_json
+            .get("eventName")
+            .or_else(|| room_json.get("event_name"))
+            .and_then(|v| v.as_str())
+            .expect("room event should carry event name");
+        assert_eq!(event_name, "DebateNpcActionCreated");
+        assert_eq!(
+            room_json["payload"]["actionUid"],
+            "npc-action-spectator-301"
+        );
+        assert!(room_json["payload"].get("winner").is_none());
         Ok(())
     }
 

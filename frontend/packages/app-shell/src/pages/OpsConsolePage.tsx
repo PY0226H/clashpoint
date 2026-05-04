@@ -4,6 +4,7 @@ import {
   applyOpsObservabilityAnomalyAction,
   createOpsJudgeCalibrationDecision,
   getOpsDomainErrorInfo,
+  getOpsDebateNpcRoomConfig,
   getOpsMetricsDictionary,
   getOpsObservabilityConfig,
   getOpsJudgeRuntimeReadiness,
@@ -17,12 +18,15 @@ import {
   revokeOpsRoleAssignment,
   runOpsObservabilityEvaluationOnce,
   toOpsDomainError,
+  upsertOpsDebateNpcRoomConfig,
   upsertOpsServiceSplitReview,
   upsertOpsObservabilityThresholds,
   upsertOpsRoleAssignment,
   type OpsObservabilityThresholds,
   type OpsRole,
-  type ListOpsRoleAssignmentsInput
+  type ListOpsRoleAssignmentsInput,
+  type DebateNpcRoomConfig,
+  type DebateNpcRoomStatus
 } from "@echoisle/ops-domain";
 import { Button, InlineHint, SectionTitle, TextField } from "@echoisle/ui";
 import { OpsCalibrationDecisionActions } from "../components/OpsCalibrationDecisionActions";
@@ -34,6 +38,7 @@ import {
 const ROLE_OPTIONS: OpsRole[] = ["ops_admin", "ops_reviewer", "ops_viewer"];
 const ROLE_LIST_PII_OPTIONS = ["minimal", "full"] as const;
 const ALERT_STATUS_OPTIONS = ["all", "raised", "suppressed", "cleared"] as const;
+const NPC_ROOM_STATUS_OPTIONS: DebateNpcRoomStatus[] = ["active", "silent", "manual_takeover", "unavailable"];
 const ALERT_PAGE_SIZE_OPTIONS = [1, 3, 5, 10] as const;
 const OBSERVABILITY_ERROR_MAX_VISIBLE = 4;
 const OBSERVABILITY_ERROR_MAX_CHARS = 120;
@@ -45,6 +50,20 @@ type RoleListPiiLevel = NonNullable<ListOpsRoleAssignmentsInput["piiLevel"]>;
 type ThresholdFieldKey = keyof OpsObservabilityThresholds;
 type SplitReviewSelection = "unset" | "required" | "not_required";
 type SplitReviewAuditComplianceFilter = "all" | "required" | "not_required";
+type NpcRoomConfigDraft = {
+  enabled: boolean;
+  status: DebateNpcRoomStatus;
+  personaStyle: string;
+  displayName: string;
+  allowSpeak: boolean;
+  allowPraise: boolean;
+  allowEffect: boolean;
+  allowStateChange: boolean;
+  allowWarning: boolean;
+  allowPublicCall: boolean;
+  allowPause: boolean;
+  statusReason: string;
+};
 
 const THRESHOLD_FIELD_ORDER: ThresholdFieldKey[] = [
   "lowSuccessRateThreshold",
@@ -105,6 +124,23 @@ function toThresholdDraft(input: OpsObservabilityThresholds): Record<ThresholdFi
     highDbLatencyThresholdMs: String(input.highDbLatencyThresholdMs),
     lowCacheHitRateThreshold: String(input.lowCacheHitRateThreshold),
     minRequestForCacheHitCheck: String(input.minRequestForCacheHitCheck)
+  };
+}
+
+function toNpcRoomConfigDraft(input: DebateNpcRoomConfig): NpcRoomConfigDraft {
+  return {
+    enabled: input.enabled,
+    status: input.status,
+    personaStyle: input.personaStyle,
+    displayName: input.displayName,
+    allowSpeak: input.allowSpeak,
+    allowPraise: input.allowPraise,
+    allowEffect: input.allowEffect,
+    allowStateChange: input.allowStateChange,
+    allowWarning: input.allowWarning,
+    allowPublicCall: input.allowPublicCall,
+    allowPause: input.allowPause,
+    statusReason: input.statusReason || ""
   };
 }
 
@@ -248,6 +284,9 @@ export function OpsConsolePage() {
   const [targetUserId, setTargetUserId] = useState("");
   const [targetRole, setTargetRole] = useState<OpsRole>("ops_viewer");
   const [roleListPiiLevel, setRoleListPiiLevel] = useState<RoleListPiiLevel>("minimal");
+  const [npcSessionIdInput, setNpcSessionIdInput] = useState("");
+  const [npcConfigDraft, setNpcConfigDraft] = useState<NpcRoomConfigDraft | null>(null);
+  const [npcConfigDirty, setNpcConfigDirty] = useState(false);
   const [alertStatusFilter, setAlertStatusFilter] = useState<AlertStatusFilter>("all");
   const [alertPageSize, setAlertPageSize] = useState<number>(3);
   const [alertPageIndex, setAlertPageIndex] = useState(0);
@@ -268,6 +307,16 @@ export function OpsConsolePage() {
   const rbacMeQuery = useQuery({
     queryKey: ["ops-rbac-me"],
     queryFn: () => getOpsRbacMe(),
+    retry: false
+  });
+  const npcSessionId = useMemo(() => {
+    const parsed = Math.floor(Number(npcSessionIdInput));
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+  }, [npcSessionIdInput]);
+  const npcConfigQuery = useQuery({
+    queryKey: ["ops-debate-npc-config", npcSessionId],
+    queryFn: () => getOpsDebateNpcRoomConfig(npcSessionId || 0),
+    enabled: Boolean(rbacMeQuery.data?.permissions.debateManage && npcSessionId),
     retry: false
   });
 
@@ -414,6 +463,33 @@ export function OpsConsolePage() {
     splitReviewAuditUpdatedByFilter
   ]);
 
+  const upsertNpcConfigMutation = useMutation({
+    mutationFn: async (payload: { sessionId: number; draft: NpcRoomConfigDraft }) =>
+      upsertOpsDebateNpcRoomConfig(payload.sessionId, {
+        displayName: payload.draft.displayName.trim() || null,
+        enabled: payload.draft.enabled,
+        personaStyle: payload.draft.personaStyle.trim() || null,
+        status: payload.draft.status,
+        allowSpeak: payload.draft.allowSpeak,
+        allowPraise: payload.draft.allowPraise,
+        allowEffect: payload.draft.allowEffect,
+        allowStateChange: payload.draft.allowStateChange,
+        allowWarning: payload.draft.allowWarning,
+        allowPublicCall: payload.draft.allowPublicCall,
+        allowPause: payload.draft.allowPause,
+        statusReason: payload.draft.statusReason.trim() || null
+      }),
+    onSuccess: (config) => {
+      setNpcConfigDraft(toNpcRoomConfigDraft(config));
+      setNpcConfigDirty(false);
+      setPageHint(`Virtual judge NPC config updated for session #${config.sessionId}.`);
+      void queryClient.invalidateQueries({ queryKey: ["ops-debate-npc-config", config.sessionId] });
+    },
+    onError: (error) => {
+      setPageHint(toOpsDomainError(error));
+    }
+  });
+
   const upsertRoleMutation = useMutation({
     mutationFn: async (payload: { userId: number; role: OpsRole; expectedRevision: string }) =>
       upsertOpsRoleAssignment(payload.userId, payload.role, payload.expectedRevision),
@@ -535,6 +611,7 @@ export function OpsConsolePage() {
   });
 
   const canManageRoles = Boolean(rbacMeQuery.data?.permissions.roleManage);
+  const canManageDebate = Boolean(rbacMeQuery.data?.permissions.debateManage);
   const canReadJudgeReview = Boolean(rbacMeQuery.data?.permissions.judgeReview);
   const canReadObservability = Boolean(rbacMeQuery.data?.permissions.observabilityRead);
   const canManageObservability = Boolean(rbacMeQuery.data?.permissions.observabilityManage);
@@ -613,6 +690,15 @@ export function OpsConsolePage() {
   const normalizedSuppressMinutes = Math.max(1, Math.min(1440, Math.floor(Number(suppressMinutesInput) || 10)));
 
   useEffect(() => {
+    if (!npcConfigQuery.data) {
+      setNpcConfigDraft(null);
+      setNpcConfigDirty(false);
+      return;
+    }
+    setNpcConfigDraft(toNpcRoomConfigDraft(npcConfigQuery.data));
+    setNpcConfigDirty(false);
+  }, [npcConfigQuery.data]);
+  useEffect(() => {
     if (!observabilityConfigQuery.data?.thresholds) {
       return;
     }
@@ -684,6 +770,39 @@ export function OpsConsolePage() {
     setPageHint("Threshold edits reverted.");
   }
 
+  function updateNpcConfigDraft(patch: Partial<NpcRoomConfigDraft>) {
+    setNpcConfigDraft((prev) => {
+      if (!prev) {
+        return prev;
+      }
+      return {
+        ...prev,
+        ...patch
+      };
+    });
+    setNpcConfigDirty(true);
+  }
+
+  function resetNpcConfigDraft() {
+    if (!npcConfigQuery.data) {
+      return;
+    }
+    setNpcConfigDraft(toNpcRoomConfigDraft(npcConfigQuery.data));
+    setNpcConfigDirty(false);
+    setPageHint("Virtual judge NPC config edits reverted.");
+  }
+
+  function submitNpcConfigDraft() {
+    if (!npcSessionId || !npcConfigDraft) {
+      setPageHint("Enter a debate session id and load NPC config first.");
+      return;
+    }
+    upsertNpcConfigMutation.mutate({
+      sessionId: npcSessionId,
+      draft: npcConfigDraft
+    });
+  }
+
   function clearSplitReviewAuditFilters() {
     setSplitReviewAuditComplianceFilter("all");
     setSplitReviewAuditUpdatedByFilter("");
@@ -729,6 +848,139 @@ export function OpsConsolePage() {
         {rbacMeQuery.data?.rbacRevision ? (
           <InlineHint>RBAC revision: {rbacMeQuery.data.rbacRevision}</InlineHint>
         ) : null}
+      </section>
+
+      <section className="echo-lobby-panel">
+        <h3>Virtual Judge NPC</h3>
+        {canManageDebate ? (
+          <>
+            <div className="echo-ops-grant-row">
+              <TextField
+                aria-label="NPC Debate Session ID"
+                inputMode="numeric"
+                onChange={(event) => setNpcSessionIdInput(event.target.value)}
+                placeholder="debate session id"
+                value={npcSessionIdInput}
+              />
+              <Button
+                disabled={!npcSessionId || npcConfigQuery.isLoading}
+                onClick={() => {
+                  if (!npcSessionId) {
+                    setPageHint("Enter a valid debate session id.");
+                    return;
+                  }
+                  void queryClient.invalidateQueries({ queryKey: ["ops-debate-npc-config", npcSessionId] });
+                }}
+                type="button"
+              >
+                {npcConfigQuery.isLoading ? "Loading..." : "Load Config"}
+              </Button>
+            </div>
+            {npcConfigQuery.isError ? <p className="echo-error">{toOpsDomainError(npcConfigQuery.error)}</p> : null}
+            {npcConfigDraft ? (
+              <>
+                <div className="echo-ops-observability-grid">
+                  <article className="echo-topic-item">
+                    <h4>Room State</h4>
+                    <label className="echo-ops-role-label">
+                      <span>Display Name</span>
+                      <TextField
+                        aria-label="NPC Display Name"
+                        onChange={(event) => updateNpcConfigDraft({ displayName: event.target.value })}
+                        value={npcConfigDraft.displayName}
+                      />
+                    </label>
+                    <label className="echo-ops-role-label">
+                      <span>Persona Style</span>
+                      <TextField
+                        aria-label="NPC Persona Style"
+                        onChange={(event) => updateNpcConfigDraft({ personaStyle: event.target.value })}
+                        value={npcConfigDraft.personaStyle}
+                      />
+                    </label>
+                    <label className="echo-ops-role-label">
+                      <span>Status</span>
+                      <select
+                        aria-label="NPC Status"
+                        onChange={(event) =>
+                          updateNpcConfigDraft({ status: event.target.value as DebateNpcRoomStatus })
+                        }
+                        value={npcConfigDraft.status}
+                      >
+                        {NPC_ROOM_STATUS_OPTIONS.map((status) => (
+                          <option key={status} value={status}>
+                            {status}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="echo-ops-role-label">
+                      <span>Status Reason</span>
+                      <TextField
+                        aria-label="NPC Status Reason"
+                        onChange={(event) => updateNpcConfigDraft({ statusReason: event.target.value })}
+                        placeholder="optional reason"
+                        value={npcConfigDraft.statusReason}
+                      />
+                    </label>
+                  </article>
+
+                  <article className="echo-topic-item">
+                    <h4>Capability Gates</h4>
+                    {[
+                      ["Enabled", "enabled"],
+                      ["Speak", "allowSpeak"],
+                      ["Praise", "allowPraise"],
+                      ["Effect", "allowEffect"],
+                      ["State Change", "allowStateChange"],
+                      ["Warning", "allowWarning"],
+                      ["Public Call", "allowPublicCall"],
+                      ["Pause", "allowPause"]
+                    ].map(([label, key]) => (
+                      <label className="echo-ops-role-label" key={key}>
+                        <span>{label}</span>
+                        <input
+                          checked={Boolean(npcConfigDraft[key as keyof NpcRoomConfigDraft])}
+                          onChange={(event) =>
+                            updateNpcConfigDraft({
+                              [key]: event.target.checked
+                            } as Partial<NpcRoomConfigDraft>)
+                          }
+                          type="checkbox"
+                        />
+                      </label>
+                    ))}
+                  </article>
+                </div>
+                <div className="echo-ops-threshold-actions">
+                  <Button
+                    disabled={!npcConfigDirty || upsertNpcConfigMutation.isPending}
+                    onClick={submitNpcConfigDraft}
+                    type="button"
+                  >
+                    {upsertNpcConfigMutation.isPending ? "Saving..." : "Save NPC Config"}
+                  </Button>
+                  <Button
+                    disabled={!npcConfigDirty || upsertNpcConfigMutation.isPending}
+                    onClick={resetNpcConfigDraft}
+                    type="button"
+                  >
+                    Reset Edits
+                  </Button>
+                </div>
+                <InlineHint>
+                  updatedBy: {String(npcConfigQuery.data?.updatedByUserId ?? "--")} | updatedAt:{" "}
+                  {npcConfigQuery.data?.updatedAt ? formatUtc(npcConfigQuery.data.updatedAt) : "--"} | takeoverBy:{" "}
+                  {String(npcConfigQuery.data?.manualTakeoverByUserId ?? "--")}
+                </InlineHint>
+              </>
+            ) : (
+              <InlineHint>Enter a session id to inspect or create its virtual judge NPC config.</InlineHint>
+            )}
+          </>
+        ) : (
+          <InlineHint>Virtual judge NPC controls require `debate_manage` permission.</InlineHint>
+        )}
       </section>
 
       <section className="echo-lobby-panel">

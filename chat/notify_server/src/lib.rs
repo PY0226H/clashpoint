@@ -23,7 +23,7 @@ use serde_json::Value;
 use sqlx::{postgres::PgPoolOptions, PgPool, Postgres, Row, Transaction};
 use sse::sse_handler;
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     ops::Deref,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -107,6 +107,12 @@ pub struct UserEvent {
     pub sse_sync_required: Option<SseSyncRequiredSignal>,
     pub debate_replay: Option<DebateReplayEvent>,
     pub debate_sync_required: Option<DebateSyncRequiredSignal>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DebateRoomAccess {
+    Participant,
+    Spectator,
 }
 
 #[derive(Debug)]
@@ -585,6 +591,7 @@ pub struct AppStateInner {
     ws_connections: WsConnMap,
     debate_ws_connections: DebateWsConnMap,
     debate_memberships: DebateMembershipMap,
+    debate_room_read_accesses: DebateMembershipMap,
     sync_required_metrics: NotifySyncRequiredMetrics,
     auth_metrics: NotifyAuthMetrics,
     sse_metrics: NotifySseMetrics,
@@ -665,6 +672,10 @@ fn is_allowed_local_origin(origin: &HeaderValue) -> bool {
         || raw.starts_with("https://127.0.0.1:")
 }
 
+fn is_debate_session_spectatable(status: &str) -> bool {
+    matches!(status, "running" | "judging" | "closed")
+}
+
 async fn index_handler() -> impl IntoResponse {
     Html(INDEX_HTML)
 }
@@ -711,6 +722,7 @@ impl AppState {
         let ws_connections = Arc::new(DashMap::new());
         let debate_ws_connections = Arc::new(DashMap::new());
         let debate_memberships = Arc::new(DashMap::new());
+        let debate_room_read_accesses = Arc::new(DashMap::new());
         let db = PgPoolOptions::new()
             .max_connections(5)
             .connect_lazy(&config.server.db_url)
@@ -725,6 +737,7 @@ impl AppState {
             ws_connections,
             debate_ws_connections,
             debate_memberships,
+            debate_room_read_accesses,
             sync_required_metrics: NotifySyncRequiredMetrics::default(),
             auth_metrics: NotifyAuthMetrics::default(),
             sse_metrics: NotifySseMetrics::default(),
@@ -863,34 +876,73 @@ impl AppState {
     pub(crate) fn mark_debate_membership(&self, user_id: u64, session_id: i64) {
         self.debate_memberships
             .insert((user_id, session_id), now_unix_ms());
+        self.mark_debate_room_read_access(user_id, session_id);
     }
 
-    pub(crate) async fn is_debate_session_participant(
+    pub(crate) fn mark_debate_room_read_access(&self, user_id: u64, session_id: i64) {
+        self.debate_room_read_accesses
+            .insert((user_id, session_id), now_unix_ms());
+    }
+
+    pub(crate) async fn debate_room_realtime_access(
         &self,
         user_id: u64,
         session_id: i64,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<Option<DebateRoomAccess>> {
         if self.debate_memberships.contains_key(&(user_id, session_id)) {
-            return Ok(true);
+            return Ok(Some(DebateRoomAccess::Participant));
         }
-        let exists = sqlx::query_scalar::<_, bool>(
+        if self
+            .debate_room_read_accesses
+            .contains_key(&(user_id, session_id))
+        {
+            return Ok(Some(DebateRoomAccess::Spectator));
+        }
+
+        let row: Option<(String, bool)> = sqlx::query_as(
             r#"
-            SELECT EXISTS(
+            SELECT
+              ds.status,
+              EXISTS(
                 SELECT 1
-                FROM session_participants
-                WHERE session_id = $1
-                  AND user_id = $2
-            )
+                FROM session_participants sp
+                WHERE sp.session_id = ds.id
+                  AND sp.user_id = $2
+              ) AS is_participant
+            FROM debate_sessions ds
+            WHERE ds.id = $1
             "#,
         )
         .bind(session_id)
         .bind(user_id as i64)
-        .fetch_one(&self.db)
+        .fetch_optional(&self.db)
         .await?;
-        if exists {
+        let Some((status, is_participant)) = row else {
+            return Ok(None);
+        };
+        if is_participant {
             self.mark_debate_membership(user_id, session_id);
+            return Ok(Some(DebateRoomAccess::Participant));
         }
-        Ok(exists)
+        if is_debate_session_spectatable(&status) {
+            self.mark_debate_room_read_access(user_id, session_id);
+            return Ok(Some(DebateRoomAccess::Spectator));
+        }
+        Ok(None)
+    }
+
+    pub(crate) fn connected_debate_room_user_ids(&self, session_id: i64) -> HashSet<u64> {
+        self.debate_ws_connections
+            .iter()
+            .filter_map(|entry| {
+                let ((user_id, connected_session_id), count) = entry.pair();
+                if *connected_session_id == session_id && *count > 0 {
+                    Some(*user_id)
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     pub(crate) async fn validate_ticket_session_consistency(
@@ -938,6 +990,27 @@ impl AppState {
         if let Some(session_id) = app_event.debate_session_id() {
             self.mark_debate_membership(user_id, session_id);
         }
+        self.build_user_event_replay_payload(user_id, app_event, replay_event)
+    }
+
+    pub(crate) fn build_user_event_for_debate_viewer(
+        &self,
+        user_id: u64,
+        app_event: Arc<AppEvent>,
+        replay_event: Option<DebateReplayEvent>,
+    ) -> UserEvent {
+        if let Some(session_id) = app_event.debate_session_id() {
+            self.mark_debate_room_read_access(user_id, session_id);
+        }
+        self.build_user_event_replay_payload(user_id, app_event, replay_event)
+    }
+
+    fn build_user_event_replay_payload(
+        &self,
+        user_id: u64,
+        app_event: Arc<AppEvent>,
+        replay_event: Option<DebateReplayEvent>,
+    ) -> UserEvent {
         let sse_replay = self.append_sse_replay_event(user_id, app_event.as_ref());
         let debate_replay = match replay_event {
             Some(v) => Some(self.append_persisted_replay_event(user_id, v)),

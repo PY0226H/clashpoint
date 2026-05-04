@@ -7,7 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 DebateSide = Literal["pro", "con"]
 NpcActionType = Literal["speak", "praise", "effect", "state_changed"]
-NpcStatus = Literal["observing", "speaking", "praising", "silent", "unavailable"]
+NpcStatus = Literal["observing", "speaking", "praising", "silent", "manual_takeover", "unavailable"]
+NpcRoomStatus = Literal["active", "silent", "manual_takeover", "unavailable"]
 
 
 def utc_now_iso() -> str:
@@ -27,9 +28,31 @@ class DebateMessageSnapshot(CamelModel):
     created_at: str | None = Field(default=None, alias="createdAt")
 
 
+class NpcRoomConfig(CamelModel):
+    session_id: int = Field(alias="sessionId")
+    npc_id: str = Field(default="virtual_judge_default", alias="npcId")
+    display_name: str = Field(default="虚拟裁判", alias="displayName")
+    enabled: bool = False
+    persona_style: str = Field(default="balanced_host", alias="personaStyle")
+    status: NpcRoomStatus = "unavailable"
+    allow_speak: bool = Field(default=True, alias="allowSpeak")
+    allow_praise: bool = Field(default=True, alias="allowPraise")
+    allow_effect: bool = Field(default=True, alias="allowEffect")
+    allow_state_change: bool = Field(default=True, alias="allowStateChange")
+    allow_warning: bool = Field(default=True, alias="allowWarning")
+    allow_public_call: bool = Field(default=False, alias="allowPublicCall")
+    allow_pause: bool = Field(default=False, alias="allowPause")
+    manual_takeover_by_user_id: int | None = Field(default=None, alias="manualTakeoverByUserId")
+    status_reason: str | None = Field(default=None, alias="statusReason")
+    updated_by_user_id: int | None = Field(default=None, alias="updatedByUserId")
+    created_at: str | None = Field(default=None, alias="createdAt")
+    updated_at: str | None = Field(default=None, alias="updatedAt")
+
+
 class NpcDecisionContext(CamelModel):
     session_id: int = Field(alias="sessionId")
     npc_id: str = Field(default="virtual_judge_default", alias="npcId")
+    room_config: NpcRoomConfig = Field(alias="roomConfig")
     source_event_id: str | None = Field(default=None, alias="sourceEventId")
     trigger_message: DebateMessageSnapshot | None = Field(default=None, alias="triggerMessage")
     recent_messages: list[DebateMessageSnapshot] = Field(default_factory=list, alias="recentMessages")

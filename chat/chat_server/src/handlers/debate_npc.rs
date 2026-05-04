@@ -3,9 +3,65 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
-    Json,
+    Extension, Json,
 };
+use chat_core::User;
 use serde_json::Value;
+
+#[utoipa::path(
+    get,
+    path = "/api/debate/ops/npc/sessions/{session_id}/config",
+    params(
+        ("session_id" = u64, Path, description = "Debate session id"),
+    ),
+    responses(
+        (status = 200, description = "Virtual judge NPC room config", body = crate::DebateNpcRoomConfig),
+        (status = 401, description = "Missing or invalid token", body = crate::ErrorOutput),
+        (status = 404, description = "Session not found", body = crate::ErrorOutput),
+        (status = 409, description = "Missing debate_manage permission", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
+    ),
+    security(("token" = []))
+)]
+pub(crate) async fn get_debate_npc_room_config_ops_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+    Path(session_id): Path<u64>,
+) -> Result<impl IntoResponse, AppError> {
+    let ret = state
+        .get_debate_npc_room_config_by_ops(&user, session_id, None)
+        .await?;
+    Ok((StatusCode::OK, Json(ret)))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/debate/ops/npc/sessions/{session_id}/config",
+    params(
+        ("session_id" = u64, Path, description = "Debate session id"),
+    ),
+    request_body = crate::UpsertDebateNpcRoomConfigInput,
+    responses(
+        (status = 200, description = "Updated virtual judge NPC room config", body = crate::DebateNpcRoomConfig),
+        (status = 400, description = "Invalid input", body = crate::ErrorOutput),
+        (status = 401, description = "Missing or invalid token", body = crate::ErrorOutput),
+        (status = 404, description = "Session not found", body = crate::ErrorOutput),
+        (status = 409, description = "Missing debate_manage permission", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
+    ),
+    security(("token" = []))
+)]
+pub(crate) async fn upsert_debate_npc_room_config_ops_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+    Path(session_id): Path<u64>,
+    Json(input): Json<crate::UpsertDebateNpcRoomConfigInput>,
+) -> Result<impl IntoResponse, AppError> {
+    let ret = state
+        .upsert_debate_npc_room_config_by_ops(&user, session_id, input)
+        .await?;
+    Ok((StatusCode::OK, Json(ret)))
+}
 
 #[utoipa::path(
     get,

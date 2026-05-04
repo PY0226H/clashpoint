@@ -39,6 +39,14 @@ class NpcEventProcessor:
             trigger_message_id=trigger.message_id,
             source_event_id=trigger.source_event_id,
         )
+        control_plane_decision = _control_plane_silent_decision(context)
+        if control_plane_decision is not None:
+            return NpcEventProcessingRun(
+                status="silent",
+                trigger=trigger,
+                decisionRun=control_plane_decision,
+                failures=control_plane_decision.failures,
+            )
         decision_run = await self._router.decide(context)
         if decision_run.candidate is None:
             return NpcEventProcessingRun(
@@ -76,3 +84,26 @@ class NpcEventProcessor:
         )
         self.dlq.append(run)
         return run
+
+
+def _control_plane_silent_decision(context: NpcDecisionContext) -> NpcDecisionRun | None:
+    config = context.room_config
+    reason: str | None = None
+    if not config.enabled:
+        reason = "npc_disabled"
+    elif config.status != "active":
+        reason = f"npc_status_{config.status}"
+    elif not (config.allow_speak or config.allow_praise or config.allow_effect):
+        reason = "npc_public_capabilities_disabled"
+    if reason is None:
+        return None
+    return NpcDecisionRun(
+        status="silent",
+        executorKind="control_plane",
+        executorVersion="ops_control_plane_v1",
+        fallbackUsed=False,
+        fallbackReason=reason,
+        candidate=None,
+        guardReason=reason,
+        failures=[],
+    )

@@ -591,6 +591,11 @@ export function DebateRoomPage() {
     1,
     Math.floor(Number(pinSecondsInput) || 60),
   );
+  const viewerRole = String(messagesQuery.data?.viewerRole || "participant");
+  const isSpectator = viewerRole === "spectator";
+  const canSendMessage =
+    messagesQuery.data?.canSendMessage ?? viewerRole === "participant";
+  const participantActionDisabled = isSpectator;
 
   if (!Number.isFinite(sessionIdNum) || sessionIdNum <= 0) {
     return (
@@ -612,6 +617,7 @@ export function DebateRoomPage() {
           </p>
         </div>
         <div className="echo-room-top-actions">
+          {isSpectator ? <InlineHint>Spectator Mode</InlineHint> : null}
           <InlineHint>Realtime: {wsStatusLabel}</InlineHint>
           <Button onClick={() => navigate("/debate")} type="button">
             Back To Lobby
@@ -668,7 +674,7 @@ export function DebateRoomPage() {
         <h3>Judge & Draw</h3>
         <div className="echo-lobby-actions">
           <Button
-            disabled={requestJudgeMutation.isPending}
+            disabled={requestJudgeMutation.isPending || participantActionDisabled}
             onClick={() => requestJudgeMutation.mutate()}
             type="button"
           >
@@ -677,14 +683,22 @@ export function DebateRoomPage() {
               : "Request AI Judge"}
           </Button>
           <Button
-            disabled={drawVoteMutation.isPending || drawVote?.status !== "open"}
+            disabled={
+              drawVoteMutation.isPending ||
+              drawVote?.status !== "open" ||
+              participantActionDisabled
+            }
             onClick={() => drawVoteMutation.mutate(true)}
             type="button"
           >
             {drawVoteMutation.isPending ? "Submitting..." : "Vote Draw"}
           </Button>
           <Button
-            disabled={drawVoteMutation.isPending || drawVote?.status !== "open"}
+            disabled={
+              drawVoteMutation.isPending ||
+              drawVote?.status !== "open" ||
+              participantActionDisabled
+            }
             onClick={() => drawVoteMutation.mutate(false)}
             type="button"
           >
@@ -819,7 +833,10 @@ export function DebateRoomPage() {
             {judgeChallengeView.requestable ? (
               <div className="echo-room-card-actions">
                 <Button
-                  disabled={requestJudgeChallengeMutation.isPending}
+                  disabled={
+                    requestJudgeChallengeMutation.isPending ||
+                    participantActionDisabled
+                  }
                   onClick={() => requestJudgeChallengeMutation.mutate()}
                   type="button"
                 >
@@ -917,7 +934,7 @@ export function DebateRoomPage() {
               <p>{message.content}</p>
               <div className="echo-lobby-actions">
                 <Button
-                  disabled={pinMutation.isPending}
+                  disabled={pinMutation.isPending || participantActionDisabled}
                   onClick={() =>
                     pinMutation.mutate({
                       messageId: message.id,
@@ -944,6 +961,7 @@ export function DebateRoomPage() {
         <div className="echo-wallet-probe-row">
           <TextField
             aria-label="Pin Seconds"
+            disabled={participantActionDisabled}
             inputMode="numeric"
             onChange={(event) => setPinSecondsInput(event.target.value)}
             placeholder="pin seconds"
@@ -956,13 +974,16 @@ export function DebateRoomPage() {
         <div className="echo-room-composer">
           <textarea
             className="echo-room-input"
+            disabled={!canSendMessage}
             onChange={(event) => setMessageInput(event.target.value)}
             placeholder="Share your argument..."
             rows={3}
             value={messageInput}
           />
           <Button
-            disabled={sendMutation.isPending || !messageInput.trim()}
+            disabled={
+              sendMutation.isPending || !messageInput.trim() || !canSendMessage
+            }
             onClick={() => sendMutation.mutate(messageInput)}
             type="button"
           >

@@ -15,14 +15,15 @@ pub use agent::{CreateAgent, UpdateAgent};
 pub use chat::{CreateChat, UpdateChat, UpdateChatMembers};
 pub use debate::{
     CreateDebateMessageInput, DebateMessage, DebateNpcAction, DebateNpcMessageSnapshot,
-    DebatePinnedMessage, DebateSessionSummary, DebateTopic, GetDebateNpcDecisionContextOutput,
-    GetDebateNpcDecisionContextQuery, JoinDebateSessionInput, JoinDebateSessionOutput,
-    ListDebateMessages, ListDebateMessagesOutput, ListDebatePinnedMessages,
-    ListDebatePinnedMessagesOutput, ListDebateSessions, ListDebateSessionsOutput, ListDebateTopics,
-    ListDebateTopicsOutput, OpsCreateDebateSessionInput, OpsCreateDebateTopicInput,
-    OpsUpdateDebateSessionInput, OpsUpdateDebateTopicInput, PinDebateMessageInput,
-    PinDebateMessageOutput, SubmitDebateNpcActionCandidateInput,
-    SubmitDebateNpcActionCandidateOutput,
+    DebateNpcRoomConfig, DebatePinnedMessage, DebateSessionSummary, DebateTopic,
+    GetDebateNpcDecisionContextOutput, GetDebateNpcDecisionContextQuery, JoinDebateSessionInput,
+    JoinDebateSessionOutput, ListDebateMessages, ListDebateMessagesOutput,
+    ListDebatePinnedMessages, ListDebatePinnedMessagesOutput, ListDebateSessions,
+    ListDebateSessionsOutput, ListDebateTopics, ListDebateTopicsOutput,
+    OpsCreateDebateSessionInput, OpsCreateDebateTopicInput, OpsUpdateDebateSessionInput,
+    OpsUpdateDebateTopicInput, PinDebateMessageInput, PinDebateMessageOutput,
+    SubmitDebateNpcActionCandidateInput, SubmitDebateNpcActionCandidateOutput,
+    UpsertDebateNpcRoomConfigInput,
 };
 pub use judge::{
     CreateJudgeCalibrationDecisionOpsInput, CreateJudgeCalibrationDecisionOpsOutput,

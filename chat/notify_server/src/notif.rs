@@ -1,6 +1,6 @@
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
-use crate::AppState;
+use crate::{AppState, DebateReplayEvent};
 use chat_core::{Chat, Message};
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
@@ -759,8 +759,15 @@ async fn dispatch_loaded_notification(
             (None, true)
         }
     };
+    let participant_user_ids = notification.user_ids;
+    let mut recipient_user_ids = participant_user_ids.clone();
+    if let Some(session_id) = notification.event.debate_session_id() {
+        recipient_user_ids.extend(state.connected_debate_room_user_ids(session_id));
+    }
+
     let users = &state.users;
-    for user_id in notification.user_ids {
+    for user_id in recipient_user_ids {
+        let is_participant_recipient = participant_user_ids.contains(&user_id);
         let user_event = if replay_persist_failed {
             state
                 .build_sync_required_user_event_for_recipient(
@@ -769,17 +776,21 @@ async fn dispatch_loaded_notification(
                 )
                 .map(Arc::new)
                 .unwrap_or_else(|| {
-                    Arc::new(state.build_user_event_for_recipient(
+                    Arc::new(build_debate_room_user_event(
+                        state,
                         user_id,
                         notification.event.clone(),
                         replay_event.clone(),
+                        is_participant_recipient,
                     ))
                 })
         } else {
-            Arc::new(state.build_user_event_for_recipient(
+            Arc::new(build_debate_room_user_event(
+                state,
                 user_id,
                 notification.event.clone(),
                 replay_event.clone(),
+                is_participant_recipient,
             ))
         };
         if let Some(tx) = users.get(&user_id) {
@@ -789,6 +800,19 @@ async fn dispatch_loaded_notification(
         }
     }
     Ok(())
+}
+
+fn build_debate_room_user_event(
+    state: &AppState,
+    user_id: u64,
+    event: Arc<AppEvent>,
+    replay_event: Option<DebateReplayEvent>,
+    is_participant_recipient: bool,
+) -> crate::UserEvent {
+    if event.debate_session_id().is_some() && !is_participant_recipient {
+        return state.build_user_event_for_debate_viewer(user_id, event, replay_event);
+    }
+    state.build_user_event_for_recipient(user_id, event, replay_event)
 }
 
 async fn load_debate_session_user_ids(
@@ -1225,6 +1249,44 @@ mod tests {
         assert_eq!(sync.reason, "persist_failed");
         assert_eq!(sync.session_id, 11);
         assert!(event.debate_replay.is_none());
+    }
+
+    #[tokio::test]
+    async fn dispatch_loaded_notification_should_fanout_debate_events_to_connected_spectators() {
+        let state = test_state_with_db_url("postgres://localhost:1/chat?connect_timeout=1");
+        state.mark_debate_membership(7, 15);
+        state.mark_debate_room_read_access(42, 15);
+        assert!(state.try_acquire_debate_ws_connection(42, 15));
+        let mut spectator_rx = state.subscribe_user_events(42);
+
+        let notification = Notification {
+            user_ids: HashSet::from([7_u64]),
+            event: Arc::new(AppEvent::DebateNpcActionCreated(
+                sample_debate_npc_action_created(),
+            )),
+        };
+
+        let ret = dispatch_loaded_notification(&state, notification).await;
+        assert!(ret.is_ok(), "dispatch should include connected spectators");
+
+        let event = timeout(Duration::from_secs(2), spectator_rx.recv())
+            .await
+            .expect("spectator should receive fanout")
+            .expect("broadcast should deliver spectator fanout");
+        assert!(matches!(
+            event.app_event.as_ref(),
+            AppEvent::DebateNpcActionCreated(_)
+        ));
+        let sync = event
+            .debate_sync_required
+            .as_ref()
+            .expect("db failure should still degrade through spectator fanout");
+        assert_eq!(sync.session_id, 15);
+        assert_eq!(sync.reason, "persist_failed");
+        assert_eq!(
+            state.debate_room_realtime_access(42, 15).await.unwrap(),
+            Some(crate::DebateRoomAccess::Spectator)
+        );
     }
 
     #[test]

@@ -459,6 +459,9 @@ async fn list_debate_messages_should_allow_spectator_when_running() -> Result<()
     assert_eq!(rows.items[0].content, "spectator readable message");
     assert!(!rows.has_more);
     assert!(rows.next_cursor.is_none());
+    assert_eq!(rows.viewer_role, "spectator");
+    assert_eq!(rows.viewer_side, None);
+    assert!(!rows.can_send_message);
     Ok(())
 }
 
@@ -575,6 +578,9 @@ async fn list_debate_messages_should_return_envelope_with_cursor() -> Result<()>
     assert_eq!(page1.items[1].id, third.id);
     assert_eq!(page1.next_cursor, Some(second.id as u64));
     assert_eq!(page1.revision, third.id.to_string());
+    assert_eq!(page1.viewer_role, "participant");
+    assert_eq!(page1.viewer_side.as_deref(), Some("pro"));
+    assert!(page1.can_send_message);
 
     let page2 = state
         .list_debate_messages(

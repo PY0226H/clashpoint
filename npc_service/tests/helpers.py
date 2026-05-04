@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from app.models import DebateMessageCreatedTrigger, DebateMessageSnapshot, NpcDecisionContext
+from app.models import (
+    DebateMessageCreatedTrigger,
+    DebateMessageSnapshot,
+    NpcDecisionContext,
+    NpcRoomConfig,
+)
 from app.settings import EventConsumerSettings, OpenAIProviderSettings, Settings
 
 
@@ -73,16 +78,48 @@ _DEFAULT_TRIGGER: object = object()
 def make_context(
     *,
     trigger_message: DebateMessageSnapshot | None | object = _DEFAULT_TRIGGER,
+    room_config: NpcRoomConfig | None = None,
 ) -> NpcDecisionContext:
     trigger = make_message() if trigger_message is _DEFAULT_TRIGGER else trigger_message
     assert trigger is None or isinstance(trigger, DebateMessageSnapshot)
     return NpcDecisionContext(
         sessionId=77,
         npcId="virtual_judge_default",
+        roomConfig=room_config or make_room_config(),
         sourceEventId="evt-1",
         triggerMessage=trigger,
         recentMessages=[trigger] if trigger is not None else [],
         now="2026-05-03T00:00:01Z",
+    )
+
+
+def make_room_config(
+    *,
+    enabled: bool = True,
+    status: str = "active",
+    allow_speak: bool = True,
+    allow_praise: bool = True,
+    allow_effect: bool = True,
+) -> NpcRoomConfig:
+    return NpcRoomConfig(
+        sessionId=77,
+        npcId="virtual_judge_default",
+        displayName="虚拟裁判",
+        enabled=enabled,
+        personaStyle="balanced_host",
+        status=status,
+        allowSpeak=allow_speak,
+        allowPraise=allow_praise,
+        allowEffect=allow_effect,
+        allowStateChange=True,
+        allowWarning=True,
+        allowPublicCall=False,
+        allowPause=False,
+        manualTakeoverByUserId=None,
+        statusReason=None,
+        updatedByUserId=None,
+        createdAt="2026-05-03T00:00:00Z",
+        updatedAt="2026-05-03T00:00:00Z",
     )
 
 

@@ -1,6 +1,12 @@
 use super::*;
 use crate::{DomainEvent, EventPublisher};
 
+struct DebateSessionViewerAccess {
+    viewer_role: String,
+    viewer_side: Option<String>,
+    can_send_message: bool,
+}
+
 #[allow(dead_code)]
 impl AppState {
     pub async fn create_debate_message(
@@ -404,14 +410,15 @@ impl AppState {
             .load_session_for_action(&mut tx, session_id_i64)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("debate session id {session_id}")))?;
-        self.ensure_debate_session_readable(
-            &mut tx,
-            session_id_i64,
-            user,
-            &session.status,
-            "debate_messages_read_forbidden",
-        )
-        .await?;
+        let viewer_access = self
+            .ensure_debate_session_readable(
+                &mut tx,
+                session_id_i64,
+                user,
+                &session.status,
+                "debate_messages_read_forbidden",
+            )
+            .await?;
 
         let mut rows: Vec<DebateMessage> = sqlx::query_as(
             r#"
@@ -456,6 +463,9 @@ impl AppState {
             has_more,
             next_cursor,
             revision: latest_message_id.to_string(),
+            viewer_role: viewer_access.viewer_role,
+            viewer_side: viewer_access.viewer_side,
+            can_send_message: viewer_access.can_send_message,
         })
     }
 
@@ -810,14 +820,10 @@ impl AppState {
         user: &User,
         session_status: &str,
         forbidden_code: &str,
-    ) -> Result<(), AppError> {
-        if can_spectate_status(session_status) {
-            return Ok(());
-        }
-
-        let participant: Option<(i64,)> = sqlx::query_as(
+    ) -> Result<DebateSessionViewerAccess, AppError> {
+        let participant: Option<(String,)> = sqlx::query_as(
             r#"
-            SELECT user_id
+            SELECT side
             FROM session_participants
             WHERE session_id = $1 AND user_id = $2
             "#,
@@ -826,8 +832,20 @@ impl AppState {
         .bind(user.id)
         .fetch_optional(&mut **tx)
         .await?;
-        if participant.is_some() {
-            return Ok(());
+        if let Some((side,)) = participant {
+            return Ok(DebateSessionViewerAccess {
+                viewer_role: "participant".to_string(),
+                viewer_side: Some(side),
+                can_send_message: can_join_status(session_status),
+            });
+        }
+
+        if can_spectate_status(session_status) {
+            return Ok(DebateSessionViewerAccess {
+                viewer_role: "spectator".to_string(),
+                viewer_side: None,
+                can_send_message: false,
+            });
         }
 
         Err(AppError::DebateConflict(forbidden_code.to_string()))

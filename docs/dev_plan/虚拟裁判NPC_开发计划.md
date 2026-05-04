@@ -94,8 +94,8 @@
 | --- | --- | --- | --- |
 | P0-A. `virtual-judge-npc-next-stage-planning-current-state` | 生成下一阶段计划，承接 B50/C47 与 PRD 缺口 | 已完成 | 本文档完成后即为下一阶段执行入口；已切换 default slot |
 | P1-B. `virtual-judge-npc-event-consumer-cutover` | 将 `npc_service` 输入从本地 webhook 推进到 Kafka/event-bus consumer | 已完成 | 已新增事件消费 wrapper、Kafka/event-bus envelope 解码、commit/retry/DLQ 语义、可选 Kafka source 和 webhook local-dev 开关 |
-| P1-C. `virtual-judge-npc-spectator-realtime-visibility` | 让观战用户可实时看到 NPC action，同时保持只读权限 | 待执行 | 对齐 PRD 观战用户需求和系统设计第 11 节 |
-| P1-D. `virtual-judge-npc-ops-control-plane` | 补齐运营开关、风格、能力控制和人工接管最小闭环 | 待执行 | 对齐 PRD 第 9 节运营控制 |
+| P1-C. `virtual-judge-npc-spectator-realtime-visibility` | 让观战用户可实时看到 NPC action，同时保持只读权限 | 已完成 | notify Debate Room WS 支持 participant/spectator 访问，connected spectators 可收到 NPC action；消息列表返回 viewer role，前端按观战态禁用参赛动作 |
+| P1-D. `virtual-judge-npc-ops-control-plane` | 补齐运营开关、风格、能力控制和人工接管最小闭环 | 已完成 | 已新增 chat room config 扩展、Ops API、candidate 状态/能力二次拦截、npc_service roomConfig 静默降级和 Ops Console 最小入口 |
 | P2-E. `virtual-judge-npc-public-call-history-feedback` | 支持用户公开呼叫 NPC、查看近期行为和提交轻量反馈 | 待执行 | 对齐 PRD 第 8 节用户交互 |
 | P2-F. `virtual-judge-npc-llm-canary-cost-latency-guard` | 强化真实 LLM 主路径：provider canary、成本/延迟预算、熔断和回滚 | 待执行 | 确保 `llm_executor_v1` 是主路径，rule 只降级 |
 | P2-G. `virtual-judge-npc-visual-experience-polish` | 增强动态形象、动效分级、低动效和移动端表现 | 待执行 | 对齐 PRD 第 6 节动态形象展示 |
@@ -105,12 +105,11 @@
 
 ## 6. 下一开发模块建议
 
-1. 先执行 P1-B `virtual-judge-npc-event-consumer-cutover`。这是从 MVP 临时闭环走向长期架构的关键，优先级最高。
-2. P1-B 完成后执行 P1-C `virtual-judge-npc-spectator-realtime-visibility`。PRD 明确观战用户也应感知 NPC，且该项会影响 WS ACL。
-3. P1-C 后执行 P1-D `virtual-judge-npc-ops-control-plane`，避免后续公开呼叫、强动效和 LLM canary 没有运营兜底。
-4. P2-E/P2-F/P2-G 可按资源拆开推进，但公开呼叫和真实 LLM canary 都必须保持正式裁决隔离。
-5. P3-H 暂停状态机只做设计门禁；设计未通过前不实现 NPC pause tool。
-6. P3-I 作为 Beta 验收前的统一运行态证据切片。
+1. 下一步执行 P2-E `virtual-judge-npc-public-call-history-feedback`，补齐用户公开交互闭环。
+2. P2-E 完成后执行 P2-F `virtual-judge-npc-llm-canary-cost-latency-guard`，强化真实 LLM 主路径的可观测和可回滚能力。
+3. P2-G 可按资源拆开推进，但视觉增强必须保持正式裁决隔离。
+4. P3-H 暂停状态机只做设计门禁；设计未通过前不实现 NPC pause tool。
+5. P3-I 作为 Beta 验收前的统一运行态证据切片。
 
 ## 7. 模块详情
 
@@ -208,6 +207,8 @@
 
 ### P1-D. `virtual-judge-npc-ops-control-plane`
 
+状态：已完成。
+
 目标：
 
 1. 提供运营可控的 NPC 启用、风格、能力开关和人工接管最小闭环。
@@ -241,6 +242,15 @@
 1. chat config / candidate guard targeted tests。
 2. npc_service context capability tests。
 3. app-shell 状态展示 tests。
+
+完成快照：
+
+1. `debate_npc_room_configs` 扩展为按场次控制启用状态、persona style、`active/silent/manual_takeover/unavailable`、发言/赞赏/特效/state change/警告/公开呼叫/暂停能力位。
+2. `chat` 提供 Ops 读写 NPC room config API，并在状态变更时写入房间可见 `state_changed` action。
+3. `chat` 在 candidate 接收边界二次校验 `enabled`、room status 和 capability，不允许 `npc_service` 绕过运营开关。
+4. `npc_service` 从 decision context 读取 `roomConfig`，在关闭、非 active 或公开能力全关时直接 silent，不调用 executor。
+5. Ops Console 增加按场次加载、编辑和保存 NPC 配置的最小管理面板。
+6. 本切片未改动正式 AI 裁判团裁决链路。
 
 ### P2-E. `virtual-judge-npc-public-call-history-feedback`
 
@@ -463,14 +473,12 @@
 
 ## 9. 当前待决问题
 
-1. `npc_service` event consumer 第一版直接接 Kafka，还是先接现有 outbox 抽象层。
-2. 观战用户的定义：是否所有登录用户可观战，还是需要加入房间 / 购票 / 权限。
-3. 运营控制入口放在现有 Ops Console，还是先提供内部 API。
-4. 用户公开呼叫采用 `@虚拟裁判` 文本触发，还是 NPC 面板内的公开请求入口。
-5. 近期行为是否只展示最近 N 条，还是进入历史分页。
-6. 真实 LLM canary 首选模型、超时、成本上限和默认关闭策略。
-7. 动态形象首版资产采用 CSS、图片序列、Lottie 还是 canvas。
-8. 暂停 / 恢复是否由 NPC 直接触发，还是只能提出暂停建议并等待运营确认。
+1. 用户公开呼叫采用 `@虚拟裁判` 文本触发，还是 NPC 面板内的公开请求入口。
+2. 公开呼叫首版是否默认受 `allow_public_call` 关闭，还是只在 Ops 显式开启的场次可用。
+3. 近期行为是否只展示最近 N 条，还是进入历史分页。
+4. 真实 LLM canary 首选模型、超时、成本上限和默认关闭策略。
+5. 动态形象首版资产采用 CSS、图片序列、Lottie 还是 canvas。
+6. 暂停 / 恢复是否由 NPC 直接触发，还是只能提出暂停建议并等待运营确认。
 
 ## 10. 同步历史
 
@@ -480,3 +488,5 @@
 - 2026-05-04：基于虚拟裁判 NPC PRD、MVP 探索和系统设计，生成下一阶段 `virtual-judge-npc-beta-readiness-productization` 开发计划；P0-A 已完成，下一步建议执行 P1-B event consumer cutover。
 - 2026-05-04：按用户确认开始执行下一阶段计划；default slot 已切换到本计划，P1-B `virtual-judge-npc-event-consumer-cutover` 进入进行中。
 - 2026-05-04：完成 P1-B `virtual-judge-npc-event-consumer-cutover`；`npc_service` 已具备 Kafka/event-bus envelope consumer、终态 commit、失败重试、DLQ JSONL、可选 Kafka source 与 webhook local-dev 开关；下一步执行 P1-C `virtual-judge-npc-spectator-realtime-visibility`。
+- 2026-05-04：完成 P1-C `virtual-judge-npc-spectator-realtime-visibility`；notify Debate Room WS 入口支持 participant/spectator 两种访问，connected spectator 会被纳入房间事件 fanout，`ListDebateMessagesOutput` 返回 viewer role，前端 Debate Room 观战态禁用发言、置顶、Judge / Draw 等参赛动作；下一步执行 P1-D `virtual-judge-npc-ops-control-plane`。
+- 2026-05-04：完成 P1-D `virtual-judge-npc-ops-control-plane`；chat 新增 NPC room config 扩展、Ops 读写 API、状态/能力二次拦截和人工接管状态事件，npc_service 按 `roomConfig` 静默降级，Ops Console 增加按场次配置入口；下一步执行 P2-E `virtual-judge-npc-public-call-history-feedback`。

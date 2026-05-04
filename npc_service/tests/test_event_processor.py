@@ -10,7 +10,7 @@ from app.event_processor import NpcEventProcessor
 from app.guard import candidate_from_raw_output
 from app.models import NpcDecisionContext, NpcDecisionRun
 
-from helpers import make_context, make_settings, make_trigger
+from helpers import make_context, make_room_config, make_settings, make_trigger
 
 
 class FakeRouter:
@@ -21,8 +21,10 @@ class FakeRouter:
             "targetMessageId": 1001,
         }
         self.context: NpcDecisionContext | None = None
+        self.decision_count = 0
 
     async def decide(self, context: NpcDecisionContext) -> NpcDecisionRun:
+        self.decision_count += 1
         self.context = context
         settings = make_settings()
         return NpcDecisionRun(
@@ -80,6 +82,40 @@ def test_event_processor_fetches_context_decides_and_submits_candidate() -> None
         assert router.context.source_event_id == "evt-1"
         assert observed["candidate_payload"]["actionType"] == "praise"
         assert observed["candidate_payload"]["sourceMessageId"] == 1001
+
+    asyncio.run(scenario())
+
+
+def test_event_processor_stays_silent_when_room_config_blocks_npc() -> None:
+    async def scenario() -> None:
+        post_count = 0
+        context = make_context(room_config=make_room_config(enabled=True, status="manual_takeover"))
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal post_count
+            if request.method == "GET":
+                return httpx.Response(200, json=context.model_dump(by_alias=True))
+            post_count += 1
+            return httpx.Response(500, json={"error": "should not submit"})
+
+        settings = make_settings()
+        router = FakeRouter()
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            processor = NpcEventProcessor(
+                settings=settings,
+                router=router,
+                chat_client=NpcChatClient(settings=settings, client=client),
+            )
+
+            run = await processor.handle_debate_message_created(make_trigger())
+
+        assert run.status == "silent"
+        assert run.decision_run.status == "silent"
+        assert run.decision_run.guard_reason == "npc_status_manual_takeover"
+        assert run.submit_attempts == 0
+        assert post_count == 0
+        assert router.decision_count == 0
 
     asyncio.run(scenario())
 
