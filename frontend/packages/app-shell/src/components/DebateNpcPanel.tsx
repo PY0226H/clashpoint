@@ -22,6 +22,7 @@ type DebateNpcPanelProps = {
 };
 
 type DebateNpcVisualProps = {
+  actionType: DebateNpcFeedItem["actionType"] | null;
   effectKind: string | null;
   effectNonce: number;
   status: DebateNpcStatus;
@@ -33,20 +34,62 @@ type DebateNpcActionFeedProps = {
   onFeedback?: (actionId: number, feedbackType: DebateNpcFeedbackType) => void;
 };
 
-const STATUS_LABEL: Record<DebateNpcStatus, string> = {
-  observing: "Observing",
-  speaking: "Speaking",
-  praising: "Praising",
-  silent: "Silent",
-  manual_takeover: "Manual",
-  unavailable: "Unavailable",
+const STATUS_META: Record<
+  DebateNpcStatus,
+  {
+    label: string;
+    summary: string;
+  }
+> = {
+  observing: {
+    label: "Watching",
+    summary: "Tracking the room rhythm.",
+  },
+  speaking: {
+    label: "On mic",
+    summary: "Sharing a public room cue.",
+  },
+  praising: {
+    label: "Cheering",
+    summary: "Spotlighting a strong turn.",
+  },
+  silent: {
+    label: "Quiet",
+    summary: "Holding the stage back.",
+  },
+  manual_takeover: {
+    label: "Manual",
+    summary: "Ops is steering the host.",
+  },
+  unavailable: {
+    label: "Offline",
+    summary: "Room host is unavailable.",
+  },
 };
 
-const ACTION_HEADLINE: Record<DebateNpcFeedItem["actionType"], string> = {
-  speak: "Room comment",
-  praise: "Highlighted move",
-  effect: "Room effect",
-  state_changed: "State update",
+const ACTION_META: Record<
+  DebateNpcFeedItem["actionType"],
+  {
+    headline: string;
+    intensity: "low" | "medium" | "high";
+  }
+> = {
+  speak: {
+    headline: "Room comment",
+    intensity: "medium",
+  },
+  praise: {
+    headline: "Highlighted move",
+    intensity: "high",
+  },
+  effect: {
+    headline: "Room effect",
+    intensity: "high",
+  },
+  state_changed: {
+    headline: "State update",
+    intensity: "low",
+  },
 };
 
 const PUBLIC_CALL_OPTIONS: Array<{
@@ -82,16 +125,36 @@ function formatNpcActionTime(value: string): string {
 }
 
 function DebateNpcVisual({
+  actionType,
   effectKind,
   effectNonce,
   status,
 }: DebateNpcVisualProps) {
+  const intensity = actionType ? ACTION_META[actionType].intensity : "low";
   return (
-    <div className={`echo-npc-visual is-${status}`} aria-hidden="true">
-      <div className="echo-npc-orbit" />
-      <div className="echo-npc-avatar">
-        <div className="echo-npc-avatar-face" />
+    <div
+      className={`echo-npc-visual is-${status} is-action-${actionType || "idle"}`}
+      aria-hidden="true"
+      data-action-intensity={intensity}
+      data-effect-kind={effectKind || "none"}
+    >
+      <div className="echo-npc-stage-rings">
+        <span />
+        <span />
+      </div>
+      <div className="echo-npc-avatar" data-effect-kind={effectKind || "none"}>
+        <div className="echo-npc-avatar-band" />
+        <div className="echo-npc-avatar-eyes">
+          <span />
+          <span />
+        </div>
+        <div className="echo-npc-avatar-mouth" />
         <div className="echo-npc-avatar-glow" />
+      </div>
+      <div className="echo-npc-signal-bars">
+        <span />
+        <span />
+        <span />
       </div>
       <div
         className="echo-npc-effect-burst"
@@ -120,7 +183,7 @@ function DebateNpcActionFeed({
       {items.map((item) => (
         <li className="echo-npc-feed-item" key={item.actionUid}>
           <div className="echo-npc-feed-head">
-            <strong>{ACTION_HEADLINE[item.actionType]}</strong>
+            <strong>{ACTION_META[item.actionType].headline}</strong>
             <span>{formatNpcActionTime(item.createdAt)}</span>
           </div>
           <p>{item.text}</p>
@@ -154,6 +217,11 @@ export function DebateNpcPanel({
   state,
 }: DebateNpcPanelProps) {
   const latest = state.latestAction;
+  const latestActionType = latest?.actionType || null;
+  const latestActionMeta = latestActionType
+    ? ACTION_META[latestActionType]
+    : null;
+  const statusMeta = STATUS_META[state.status];
   const [callType, setCallType] =
     useState<DebateNpcPublicCallType>("issue_summary");
   const [content, setContent] = useState("");
@@ -169,31 +237,44 @@ export function DebateNpcPanel({
   }
 
   return (
-    <section className={`echo-npc-panel is-${state.status}`} aria-live="polite">
+    <section
+      className={`echo-npc-panel is-${state.status} is-action-${
+        latestActionType || "idle"
+      }`}
+      aria-label={`${state.displayName} live room NPC`}
+      aria-live="polite"
+      data-action-intensity={latestActionMeta?.intensity || "low"}
+    >
       <header className="echo-npc-panel-header">
         <div>
           <p className="echo-npc-kicker">Room host</p>
           <h3>{state.displayName}</h3>
         </div>
-        <span className="echo-npc-status">{STATUS_LABEL[state.status]}</span>
+        <div className="echo-npc-status-block">
+          <span className="echo-npc-boundary">Live NPC</span>
+          <span className="echo-npc-status">{statusMeta.label}</span>
+        </div>
       </header>
 
       <div className="echo-npc-stage">
         <DebateNpcVisual
+          actionType={latestActionType}
           effectKind={state.latestEffectKind}
           effectNonce={state.effectNonce}
           status={state.status}
         />
         <div className="echo-npc-latest">
           <strong>
-            {latest ? ACTION_HEADLINE[latest.actionType] : "Live room pulse"}
+            {latest
+              ? ACTION_META[latest.actionType].headline
+              : "Live room pulse"}
           </strong>
           <p>
             {latest
               ? latest.text
               : "Ready to react when the debate turns lively."}
           </p>
-          <span>{latest ? latest.targetLabel : "room"}</span>
+          <span>{latest ? latest.targetLabel : statusMeta.summary}</span>
         </div>
       </div>
 

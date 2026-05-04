@@ -14,7 +14,8 @@ describe("DebateNpcPanel", () => {
 
     expect(html).toContain("Virtual Judge NPC");
     expect(html).toContain("Room host");
-    expect(html).toContain("Observing");
+    expect(html).toContain("Live NPC");
+    expect(html).toContain("Watching");
     expect(html).toContain("Watching the room.");
     expect(html).not.toContain("Winner");
     expect(html).not.toContain("Official Verdict");
@@ -44,7 +45,9 @@ describe("DebateNpcPanel", () => {
 
     const html = renderToStaticMarkup(<DebateNpcPanel state={state} />);
 
-    expect(html).toContain("Praising");
+    expect(html).toContain("Cheering");
+    expect(html).toContain("data-action-intensity=\"high\"");
+    expect(html).toContain("is-action-praise");
     expect(html).toContain("Highlighted move");
     expect(html).toContain("That rebuttal landed cleanly.");
     expect(html).toContain("message #100 / PRO / user 7");
