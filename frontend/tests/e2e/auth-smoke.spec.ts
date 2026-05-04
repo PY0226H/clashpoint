@@ -45,7 +45,12 @@ async function installAuthMocks(page: Page) {
       sessionId: number;
       npcId: string;
       displayName: string;
-      actionType: "speak" | "praise" | "effect" | "state_changed";
+      actionType:
+        | "speak"
+        | "praise"
+        | "effect"
+        | "pause_suggestion"
+        | "state_changed";
       publicText: string | null;
       targetMessageId: number | null;
       targetUserId: number | null;
@@ -316,6 +321,22 @@ async function installAuthMocks(page: Page) {
         npcStatus: "praising",
         reasonCode: "strong_rebuttal",
         createdAt: "2026-01-01T01:05:00Z",
+      },
+      {
+        actionId: 4302,
+        actionUid: `npc-smoke-${sessionId}-4302`,
+        sessionId,
+        npcId: "virtual_judge_default",
+        displayName: "Virtual Judge NPC",
+        actionType: "pause_suggestion" as const,
+        publicText: "I suggest a short pause review before the next exchange.",
+        targetMessageId: null,
+        targetUserId: null,
+        targetSide: null,
+        effectKind: null,
+        npcStatus: "speaking",
+        reasonCode: "rule_public_call_pause_review",
+        createdAt: "2026-01-01T01:06:00Z",
       },
     ];
     npcActionsBySession.set(sessionId, initial);
@@ -1484,6 +1505,24 @@ test("@smoke room virtual judge npc should support history public call and feedb
   await expect(
     page.locator(".echo-npc-latest").getByText("That rebuttal landed cleanly."),
   ).toBeVisible();
+  await expect(page.getByText("Pause suggestion")).toBeVisible();
+  await expect(
+    page.getByText("I suggest a short pause review before the next exchange."),
+  ).toBeVisible();
+  await expect(page.getByText("Paused")).toHaveCount(0);
+  await expect(page.getByText("已暂停")).toHaveCount(0);
+  await expect(page.getByPlaceholder("Share your argument...")).toBeEnabled();
+  await page
+    .getByPlaceholder("Share your argument...")
+    .fill("I can keep speaking after an NPC pause suggestion.");
+  await expect(page.getByRole("button", { name: "Send" })).toBeEnabled();
+  await page.getByPlaceholder("Share your argument...").fill("");
+  await expect(
+    page.getByRole("button", { name: "Pin 60s" }).first(),
+  ).toBeEnabled();
+  await expect(
+    page.getByRole("button", { name: "Request AI Judge" }),
+  ).toBeEnabled();
 
   await page.getByRole("button", { name: "Helpful" }).first().click();
   await expect(page.getByText("NPC feedback recorded: helpful.")).toBeVisible();

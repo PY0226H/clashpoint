@@ -135,6 +135,7 @@ export type DebateNpcActionType =
   | "speak"
   | "praise"
   | "effect"
+  | "pause_suggestion"
   | "state_changed";
 
 export type DebateNpcActionCreatedPayload = {
@@ -638,6 +639,7 @@ const DEBATE_NPC_ALLOWED_ACTION_TYPES = new Set<DebateNpcActionType>([
   "speak",
   "praise",
   "effect",
+  "pause_suggestion",
   "state_changed",
 ]);
 

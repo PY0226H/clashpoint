@@ -86,6 +86,10 @@ const ACTION_META: Record<
     headline: "Room effect",
     intensity: "high",
   },
+  pause_suggestion: {
+    headline: "Pause suggestion",
+    intensity: "medium",
+  },
   state_changed: {
     headline: "State update",
     intensity: "low",
@@ -181,7 +185,10 @@ function DebateNpcActionFeed({
   return (
     <ol className="echo-npc-feed">
       {items.map((item) => (
-        <li className="echo-npc-feed-item" key={item.actionUid}>
+        <li
+          className={`echo-npc-feed-item is-action-${item.actionType}`}
+          key={item.actionUid}
+        >
           <div className="echo-npc-feed-head">
             <strong>{ACTION_META[item.actionType].headline}</strong>
             <span>{formatNpcActionTime(item.createdAt)}</span>

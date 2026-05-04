@@ -54,14 +54,14 @@ describe("realtime-sdk debate room helpers", () => {
           sessionId: 15,
           npcId: "virtual_judge_default",
           displayName: "虚拟裁判",
-          actionType: "praise",
-          publicText: "这段反驳很漂亮。",
-          targetMessageId: 100,
-          targetUserId: 7,
-          targetSide: "pro",
-          effectKind: "sparkle",
-          npcStatus: "praising",
-          reasonCode: "strong_rebuttal",
+          actionType: "pause_suggestion",
+          publicText: "建议大家先做一次短暂停顿评估，再继续推进论点。",
+          targetMessageId: null,
+          targetUserId: null,
+          targetSide: null,
+          effectKind: null,
+          npcStatus: "speaking",
+          reasonCode: "rule_public_call_pause_review",
           createdAt: "2026-05-03T09:00:00Z",
         },
       }),
@@ -74,6 +74,7 @@ describe("realtime-sdk debate room helpers", () => {
     expect(parsed.eventName).toBe(DEBATE_NPC_ACTION_CREATED_EVENT);
     expect(parsed.payload.event).toBe(DEBATE_NPC_ACTION_CREATED_EVENT);
     expect(parsed.payload.actionUid).toBe("npc-action-301");
+    expect(parsed.payload.actionType).toBe("pause_suggestion");
   });
 
   it("builds ack message", () => {

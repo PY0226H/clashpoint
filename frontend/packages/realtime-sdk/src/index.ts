@@ -23,7 +23,12 @@ export type DebateNpcActionCreatedRoomPayload = {
   sessionId: number;
   npcId: string;
   displayName: string;
-  actionType: "speak" | "praise" | "effect" | "state_changed";
+  actionType:
+    | "speak"
+    | "praise"
+    | "effect"
+    | "pause_suggestion"
+    | "state_changed";
   publicText?: string | null;
   targetMessageId?: number | null;
   targetUserId?: number | null;

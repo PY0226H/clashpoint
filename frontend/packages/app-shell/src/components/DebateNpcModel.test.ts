@@ -77,4 +77,66 @@ describe("DebateNpcModel", () => {
       ),
     ).toBe("room");
   });
+
+  it("builds room-level pause suggestion without a pause state", () => {
+    const state = debateNpcReducer(createInitialDebateNpcState(), {
+      type: "roomAction",
+      payload: npcAction({
+        actionId: 302,
+        actionUid: "npc-action-302",
+        actionType: "pause_suggestion",
+        publicText: "I suggest a short pause review before the next exchange.",
+        targetMessageId: null,
+        targetSide: null,
+        targetUserId: null,
+        effectKind: null,
+        npcStatus: null,
+        reasonCode: "rule_public_call_pause_review",
+      }),
+    });
+
+    expect(state).toMatchObject({
+      displayName: "Virtual Judge NPC",
+      status: "speaking",
+      latestEffectKind: null,
+      effectNonce: 1,
+    });
+    expect(state.latestAction).toMatchObject({
+      actionUid: "npc-action-302",
+      actionType: "pause_suggestion",
+      text: "I suggest a short pause review before the next exchange.",
+      targetLabel: "room",
+    });
+  });
+
+  it("hydrates pause suggestion from replay history", () => {
+    const state = debateNpcReducer(createInitialDebateNpcState(), {
+      type: "history",
+      payload: [
+        {
+          actionId: 302,
+          actionUid: "npc-action-302",
+          sessionId: 15,
+          npcId: "virtual_judge_default",
+          displayName: "Virtual Judge NPC",
+          actionType: "pause_suggestion",
+          publicText: "I suggest a short pause review before the next exchange.",
+          targetMessageId: null,
+          targetUserId: null,
+          targetSide: null,
+          effectKind: null,
+          npcStatus: null,
+          reasonCode: "rule_public_call_pause_review",
+          createdAt: "2026-05-03T09:01:00Z",
+        },
+      ],
+    });
+
+    expect(state.latestAction).toMatchObject({
+      actionType: "pause_suggestion",
+      text: "I suggest a short pause review before the next exchange.",
+      targetLabel: "room",
+    });
+    expect(state.status).toBe("speaking");
+  });
 });

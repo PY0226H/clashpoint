@@ -304,6 +304,12 @@
   --echo-npc-soft: #e9f6ff;
 }
 
+.echo-npc-panel.is-action-pause_suggestion {
+  --echo-npc-accent: #2957a4;
+  --echo-npc-accent-2: #126f85;
+  --echo-npc-soft: #eaf1ff;
+}
+
 .echo-npc-panel.is-praising,
 .echo-npc-panel.is-action-effect {
   --echo-npc-accent: #b8651a;
@@ -642,6 +648,14 @@
   flex-direction: column;
   gap: 6px;
   animation: echo-npc-feed-in 260ms ease both;
+}
+
+.echo-npc-feed-item.is-action-pause_suggestion {
+  border-left-color: color-mix(
+    in srgb,
+    var(--echo-npc-accent) 54%,
+    transparent 46%
+  );
 }
 
 .echo-npc-feed-head {

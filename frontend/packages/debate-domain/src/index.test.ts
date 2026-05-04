@@ -142,6 +142,28 @@ describe("debate-domain normalize helpers", () => {
     ).toBe(true);
   });
 
+  it("accepts virtual judge NPC pause suggestion payload", () => {
+    expect(
+      isDebateNpcActionCreatedPayload({
+        event: DEBATE_NPC_ACTION_CREATED_EVENT,
+        actionId: 302,
+        actionUid: "npc-action-302",
+        sessionId: 15,
+        npcId: "virtual_judge_default",
+        displayName: "虚拟裁判",
+        actionType: "pause_suggestion",
+        publicText: "建议大家先做一次短暂停顿评估，再继续推进论点。",
+        targetMessageId: null,
+        targetUserId: null,
+        targetSide: null,
+        effectKind: null,
+        npcStatus: "speaking",
+        reasonCode: "rule_public_call_pause_review",
+        createdAt: "2026-05-03T09:01:00Z",
+      }),
+    ).toBe(true);
+  });
+
   it("rejects virtual judge NPC payload with official verdict or internal fields", () => {
     const payload = {
       event: DEBATE_NPC_ACTION_CREATED_EVENT,

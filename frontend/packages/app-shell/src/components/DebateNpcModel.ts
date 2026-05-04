@@ -92,6 +92,8 @@ export function resolveDebateNpcStatus(
       return "speaking";
     case "praise":
       return "praising";
+    case "pause_suggestion":
+      return "speaking";
     case "state_changed":
       return "observing";
     case "effect":
@@ -114,6 +116,8 @@ function resolveDebateNpcText(action: DebateNpcVisibleAction): string {
       return "Shared a room-wide comment.";
     case "effect":
       return "Sent a short room effect.";
+    case "pause_suggestion":
+      return "Suggested a brief pause review.";
     case "state_changed":
       return "Shifted back into observation.";
     default:

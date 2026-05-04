@@ -55,4 +55,46 @@ describe("DebateNpcPanel", () => {
     expect(html).not.toContain("chat");
     expect(html).not.toContain("Score");
   });
+
+  it("renders pause suggestion as advice with feedback controls", () => {
+    const state = debateNpcReducer(createInitialDebateNpcState(), {
+      type: "roomAction",
+      payload: {
+        event: "DebateNpcActionCreated",
+        actionId: 302,
+        actionUid: "npc-action-302",
+        sessionId: 15,
+        npcId: "virtual_judge_default",
+        displayName: "Virtual Judge NPC",
+        actionType: "pause_suggestion",
+        publicText: "I suggest a short pause review before the next exchange.",
+        targetMessageId: null,
+        targetUserId: null,
+        targetSide: null,
+        effectKind: null,
+        npcStatus: null,
+        reasonCode: "rule_public_call_pause_review",
+        createdAt: "2026-05-03T09:01:00Z",
+      },
+    });
+
+    const html = renderToStaticMarkup(
+      <DebateNpcPanel onFeedback={() => undefined} state={state} />,
+    );
+
+    expect(html).toContain("On mic");
+    expect(html).toContain("data-action-intensity=\"medium\"");
+    expect(html).toContain("is-action-pause_suggestion");
+    expect(html).toContain("Pause suggestion");
+    expect(html).toContain(
+      "I suggest a short pause review before the next exchange.",
+    );
+    expect(html).toContain("room");
+    expect(html).toContain("Helpful");
+    expect(html).not.toContain("Paused");
+    expect(html).not.toContain("已暂停");
+    expect(html).not.toContain("Official Verdict");
+    expect(html).not.toContain("Winner");
+    expect(html).not.toContain("Score");
+  });
 });
