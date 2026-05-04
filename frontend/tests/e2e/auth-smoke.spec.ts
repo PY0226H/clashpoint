@@ -1,13 +1,18 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 
-function json(route: Route, status: number, payload: unknown, extraHeaders?: Record<string, string>) {
+function json(
+  route: Route,
+  status: number,
+  payload: unknown,
+  extraHeaders?: Record<string, string>,
+) {
   return route.fulfill({
     status,
     headers: {
       "content-type": "application/json",
-      ...(extraHeaders || {})
+      ...(extraHeaders || {}),
     },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 }
 
@@ -32,6 +37,25 @@ async function installAuthMocks(page: Page) {
     }>
   >();
   const messageSessionById = new Map<number, number>();
+  const npcActionsBySession = new Map<
+    number,
+    Array<{
+      actionId: number;
+      actionUid: string;
+      sessionId: number;
+      npcId: string;
+      displayName: string;
+      actionType: "speak" | "praise" | "effect" | "state_changed";
+      publicText: string | null;
+      targetMessageId: number | null;
+      targetUserId: number | null;
+      targetSide: "pro" | "con" | null;
+      effectKind: string | null;
+      npcStatus: string | null;
+      reasonCode: string | null;
+      createdAt: string;
+    }>
+  >();
   const walletLedger: Array<{
     id: number;
     orderId: number | null;
@@ -50,7 +74,7 @@ async function installAuthMocks(page: Page) {
       balanceAfter: 180,
       idempotencyKey: "iap_seed_9003",
       metadata: { source: "seed" },
-      createdAt: "2026-01-01T01:02:00Z"
+      createdAt: "2026-01-01T01:02:00Z",
     },
     {
       id: 7002,
@@ -60,7 +84,7 @@ async function installAuthMocks(page: Page) {
       balanceAfter: 60,
       idempotencyKey: "pin_seed_7002",
       metadata: { source: "seed" },
-      createdAt: "2026-01-01T01:01:00Z"
+      createdAt: "2026-01-01T01:01:00Z",
     },
     {
       id: 7001,
@@ -70,8 +94,8 @@ async function installAuthMocks(page: Page) {
       balanceAfter: 80,
       idempotencyKey: "iap_seed_9001",
       metadata: { source: "seed" },
-      createdAt: "2026-01-01T00:58:00Z"
-    }
+      createdAt: "2026-01-01T00:58:00Z",
+    },
   ];
   const opsRoleAssignments: Array<{
     userId: number;
@@ -89,8 +113,8 @@ async function installAuthMocks(page: Page) {
       role: "ops_reviewer",
       grantedBy: 10,
       createdAt: "2026-01-01T00:10:00Z",
-      updatedAt: "2026-01-01T00:12:00Z"
-    }
+      updatedAt: "2026-01-01T00:12:00Z",
+    },
   ];
   let opsRbacRevision = "rbac_rev_1";
   let nextOpsRbacRevisionSeq = 2;
@@ -105,16 +129,17 @@ async function installAuthMocks(page: Page) {
       highCoalescedThreshold: 2.5,
       highDbLatencyThresholdMs: 250,
       lowCacheHitRateThreshold: 70,
-      minRequestForCacheHitCheck: 30
+      minRequestForCacheHitCheck: 30,
     },
     anomalyState: {
       "judge.success_rate.low": {
         acknowledgedAtMs: 1767229200000,
-        suppressUntilMs: 1767231000000
-      }
+        suppressUntilMs: 1767231000000,
+      },
     },
+    configRevision: "obs_rev_1",
     updatedBy: 10,
-    updatedAt: "2026-01-01T01:10:00Z"
+    updatedAt: "2026-01-01T01:10:00Z",
   };
   const splitReviewState: {
     paymentComplianceRequired: boolean | null;
@@ -125,7 +150,7 @@ async function installAuthMocks(page: Page) {
     paymentComplianceRequired: null,
     reviewNote: "",
     updatedBy: 10,
-    updatedAt: "2026-01-01T01:12:00Z"
+    updatedAt: "2026-01-01T01:12:00Z",
   };
   let nextSplitReviewAuditId = 9003;
   const splitReviewAudits: Array<{
@@ -140,15 +165,15 @@ async function installAuthMocks(page: Page) {
       paymentComplianceRequired: true,
       reviewNote: "payment compliance must be checked before split",
       updatedBy: 10,
-      createdAt: "2026-01-01T01:07:00Z"
+      createdAt: "2026-01-01T01:07:00Z",
     },
     {
       id: 9001,
       paymentComplianceRequired: null,
       reviewNote: "",
       updatedBy: 10,
-      createdAt: "2026-01-01T00:57:00Z"
-    }
+      createdAt: "2026-01-01T00:57:00Z",
+    },
   ];
   const opsAlertItems = [
     {
@@ -165,7 +190,7 @@ async function installAuthMocks(page: Page) {
       errorMessage: null,
       deliveredAt: "2026-01-01T01:09:00Z",
       createdAt: "2026-01-01T01:08:00Z",
-      updatedAt: "2026-01-01T01:09:00Z"
+      updatedAt: "2026-01-01T01:09:00Z",
     },
     {
       id: 500,
@@ -181,7 +206,7 @@ async function installAuthMocks(page: Page) {
       errorMessage: null,
       deliveredAt: "2026-01-01T01:02:00Z",
       createdAt: "2026-01-01T01:01:00Z",
-      updatedAt: "2026-01-01T01:02:00Z"
+      updatedAt: "2026-01-01T01:02:00Z",
     },
     {
       id: 499,
@@ -197,8 +222,8 @@ async function installAuthMocks(page: Page) {
       errorMessage: null,
       deliveredAt: "2026-01-01T00:58:00Z",
       createdAt: "2026-01-01T00:57:00Z",
-      updatedAt: "2026-01-01T00:58:00Z"
-    }
+      updatedAt: "2026-01-01T00:58:00Z",
+    },
   ];
   const drawVoteStateBySession = new Map<
     number,
@@ -216,7 +241,9 @@ async function installAuthMocks(page: Page) {
   >();
 
   function matchSessionPath(pathname: string, suffix: string): number | null {
-    const matched = pathname.match(new RegExp(`^/api/debate/sessions/(\\d+)/${suffix}$`));
+    const matched = pathname.match(
+      new RegExp(`^/api/debate/sessions/(\\d+)/${suffix}$`),
+    );
     if (!matched?.[1]) {
       return null;
     }
@@ -238,7 +265,7 @@ async function installAuthMocks(page: Page) {
       disagreeVotes: 0,
       rematchSessionId: null,
       votingEndsAt: "2026-01-01T01:40:00Z",
-      decidedAt: null
+      decidedAt: null,
     };
     drawVoteStateBySession.set(sessionId, created);
     return created;
@@ -261,10 +288,37 @@ async function installAuthMocks(page: Page) {
         pinSeconds: 60,
         pinnedAt: "2026-01-01T01:04:00Z",
         expiresAt: "2026-01-01T01:05:00Z",
-        status: "active"
-      }
+        status: "active",
+      },
     ];
     sessionPins.set(sessionId, initial);
+    return initial;
+  }
+
+  function getOrCreateNpcActions(sessionId: number) {
+    const existing = npcActionsBySession.get(sessionId);
+    if (existing) {
+      return existing;
+    }
+    const initial = [
+      {
+        actionId: 4301,
+        actionUid: `npc-smoke-${sessionId}-4301`,
+        sessionId,
+        npcId: "virtual_judge_default",
+        displayName: "Virtual Judge NPC",
+        actionType: "praise" as const,
+        publicText: "That rebuttal landed cleanly.",
+        targetMessageId: 2001,
+        targetUserId: 10,
+        targetSide: "pro" as const,
+        effectKind: "sparkle",
+        npcStatus: "praising",
+        reasonCode: "strong_rebuttal",
+        createdAt: "2026-01-01T01:05:00Z",
+      },
+    ];
+    npcActionsBySession.set(sessionId, initial);
     return initial;
   }
 
@@ -283,7 +337,7 @@ async function installAuthMocks(page: Page) {
       return json(route, 200, {
         fileToken: "file_token_smoke",
         notifyToken: "notify_token_smoke",
-        expiresInSecs: 3600
+        expiresInSecs: 3600,
       });
     }
 
@@ -291,11 +345,14 @@ async function installAuthMocks(page: Page) {
       return json(route, 200, {
         accessToken: "token_refresh_smoke",
         tokenType: "Bearer",
-        expiresInSecs: 7200
+        expiresInSecs: 7200,
       });
     }
 
-    if (pathname === "/api/auth/v2/signin/password" && request.method() === "POST") {
+    if (
+      pathname === "/api/auth/v2/signin/password" &&
+      request.method() === "POST"
+    ) {
       return json(route, 200, {
         accessToken: "token_password",
         tokenType: "Bearer",
@@ -305,8 +362,8 @@ async function installAuthMocks(page: Page) {
           fullname: "Smoke Password",
           email: body?.account || "super@none.org",
           phoneE164: "+86139000000000",
-          phoneBindRequired: false
-        }
+          phoneBindRequired: false,
+        },
       });
     }
 
@@ -317,7 +374,7 @@ async function installAuthMocks(page: Page) {
         sent: true,
         ttlSecs: 60,
         cooldownSecs: 1,
-        debugCode: code
+        debugCode: code,
       });
     }
 
@@ -330,27 +387,36 @@ async function installAuthMocks(page: Page) {
           id: 20,
           fullname: "Smoke Otp",
           phoneE164: body?.phone || "+86139000000000",
-          phoneBindRequired: false
-        }
+          phoneBindRequired: false,
+        },
       });
     }
 
-    if (pathname === "/api/auth/v2/wechat/challenge" && request.method() === "POST") {
+    if (
+      pathname === "/api/auth/v2/wechat/challenge" &&
+      request.method() === "POST"
+    ) {
       return json(route, 200, {
         state: "wx_state_smoke",
         expiresInSecs: 180,
-        appId: "wx_app_smoke"
+        appId: "wx_app_smoke",
       });
     }
 
-    if (pathname === "/api/auth/v2/wechat/signin" && request.method() === "POST") {
+    if (
+      pathname === "/api/auth/v2/wechat/signin" &&
+      request.method() === "POST"
+    ) {
       return json(route, 200, {
         bindRequired: true,
-        wechatTicket: "wx_ticket_smoke"
+        wechatTicket: "wx_ticket_smoke",
       });
     }
 
-    if (pathname === "/api/auth/v2/wechat/bind-phone" && request.method() === "POST") {
+    if (
+      pathname === "/api/auth/v2/wechat/bind-phone" &&
+      request.method() === "POST"
+    ) {
       if (body?.wechatTicket !== "wx_ticket_smoke") {
         return json(route, 400, { error: "invalid_wechat_ticket" });
       }
@@ -363,8 +429,8 @@ async function installAuthMocks(page: Page) {
           id: 30,
           fullname: "Smoke WeChat",
           phoneE164: body?.phone || "+86139000000000",
-          phoneBindRequired: false
-        }
+          phoneBindRequired: false,
+        },
       });
     }
 
@@ -382,12 +448,12 @@ async function installAuthMocks(page: Page) {
             isActive: true,
             createdBy: 1,
             createdAt: "2026-01-01T00:00:00Z",
-            updatedAt: "2026-01-01T00:00:00Z"
-          }
+            updatedAt: "2026-01-01T00:00:00Z",
+          },
         ],
         hasMore: false,
         nextCursor: null,
-        revision: "topic_rev_1"
+        revision: "topic_rev_1",
       });
     }
 
@@ -400,30 +466,43 @@ async function installAuthMocks(page: Page) {
           debateManage: true,
           judgeReview: true,
           judgeRejudge: true,
-          roleManage: true
+          observabilityRead: true,
+          observabilityManage: true,
+          roleManage: true,
         },
-        rbacRevision: opsRbacRevision
+        rbacRevision: opsRbacRevision,
       });
     }
 
-    if (pathname === "/api/debate/ops/rbac/roles" && request.method() === "GET") {
+    if (
+      pathname === "/api/debate/ops/rbac/roles" &&
+      request.method() === "GET"
+    ) {
       return json(route, 200, {
         items: opsRoleAssignments,
-        rbacRevision: opsRbacRevision
+        rbacRevision: opsRbacRevision,
       });
     }
 
-    if (pathname === "/api/debate/ops/observability/config" && request.method() === "GET") {
+    if (
+      pathname === "/api/debate/ops/observability/config" &&
+      request.method() === "GET"
+    ) {
       return json(route, 200, opsObservabilityConfig);
     }
 
-    if (pathname === "/api/debate/ops/observability/thresholds" && request.method() === "PUT") {
+    if (
+      pathname === "/api/debate/ops/observability/thresholds" &&
+      request.method() === "PUT"
+    ) {
       const lowSuccessRateThreshold = Number(body?.lowSuccessRateThreshold);
       const highRetryThreshold = Number(body?.highRetryThreshold);
       const highCoalescedThreshold = Number(body?.highCoalescedThreshold);
       const highDbLatencyThresholdMs = Number(body?.highDbLatencyThresholdMs);
       const lowCacheHitRateThreshold = Number(body?.lowCacheHitRateThreshold);
-      const minRequestForCacheHitCheck = Number(body?.minRequestForCacheHitCheck);
+      const minRequestForCacheHitCheck = Number(
+        body?.minRequestForCacheHitCheck,
+      );
 
       if (
         !Number.isFinite(lowSuccessRateThreshold) ||
@@ -433,7 +512,9 @@ async function installAuthMocks(page: Page) {
         !Number.isFinite(lowCacheHitRateThreshold) ||
         !Number.isFinite(minRequestForCacheHitCheck)
       ) {
-        return json(route, 400, { error: "invalid_observability_threshold_payload" });
+        return json(route, 400, {
+          error: "invalid_observability_threshold_payload",
+        });
       }
 
       opsObservabilityConfig.thresholds = {
@@ -442,32 +523,38 @@ async function installAuthMocks(page: Page) {
         highCoalescedThreshold,
         highDbLatencyThresholdMs: Math.floor(highDbLatencyThresholdMs),
         lowCacheHitRateThreshold,
-        minRequestForCacheHitCheck: Math.floor(minRequestForCacheHitCheck)
+        minRequestForCacheHitCheck: Math.floor(minRequestForCacheHitCheck),
       };
       opsObservabilityConfig.updatedBy = 10;
       opsObservabilityConfig.updatedAt = "2026-01-01T01:31:00Z";
+      opsObservabilityConfig.configRevision = "obs_rev_2";
       return json(route, 200, opsObservabilityConfig);
     }
 
-    if (pathname === "/api/debate/ops/observability/anomaly-state/actions" && request.method() === "POST") {
+    if (
+      pathname === "/api/debate/ops/observability/anomaly-state/actions" &&
+      request.method() === "POST"
+    ) {
       const alertKey = String(body?.alertKey || "").trim();
       const action = String(body?.action || "")
         .trim()
         .toLowerCase();
       if (!alertKey) {
-        return json(route, 400, { error: "invalid alert key for anomaly action" });
+        return json(route, 400, {
+          error: "invalid alert key for anomaly action",
+        });
       }
       const nowMs = 1767229900000;
       const nowIso = "2026-01-01T01:25:00Z";
       const current = opsObservabilityConfig.anomalyState[alertKey] || {
         acknowledgedAtMs: 0,
-        suppressUntilMs: 0
+        suppressUntilMs: 0,
       };
 
       if (action === "ack" || action === "acknowledge") {
         opsObservabilityConfig.anomalyState[alertKey] = {
           ...current,
-          acknowledgedAtMs: nowMs
+          acknowledgedAtMs: nowMs,
         };
       } else if (action === "suppress" || action === "mute") {
         const suppressMinutesRaw = Number(body?.suppressMinutes || 10);
@@ -476,13 +563,17 @@ async function installAuthMocks(page: Page) {
           : 10;
         opsObservabilityConfig.anomalyState[alertKey] = {
           acknowledgedAtMs: Math.max(nowMs, current.acknowledgedAtMs),
-          suppressUntilMs: nowMs + suppressMinutes * 60 * 1000
+          suppressUntilMs: nowMs + suppressMinutes * 60 * 1000,
         };
-      } else if (action === "clear" || action === "remove" || action === "unsuppress") {
+      } else if (
+        action === "clear" ||
+        action === "remove" ||
+        action === "unsuppress"
+      ) {
         delete opsObservabilityConfig.anomalyState[alertKey];
       } else {
         return json(route, 400, {
-          error: "invalid anomaly action, expect acknowledge/suppress/clear"
+          error: "invalid anomaly action, expect acknowledge/suppress/clear",
         });
       }
 
@@ -491,17 +582,25 @@ async function installAuthMocks(page: Page) {
       return json(route, 200, opsObservabilityConfig);
     }
 
-    if (pathname === "/api/debate/ops/observability/evaluate-once" && request.method() === "POST") {
-      const dryRun = (requestUrl.searchParams.get("dryRun") || "").trim().toLowerCase() === "true";
+    if (
+      pathname === "/api/debate/ops/observability/evaluate-once" &&
+      request.method() === "POST"
+    ) {
+      const dryRun =
+        (requestUrl.searchParams.get("dryRun") || "").trim().toLowerCase() ===
+        "true";
       return json(route, 200, {
         scopesScanned: 3,
         alertsRaised: dryRun ? 0 : 1,
         alertsCleared: 0,
-        alertsSuppressed: 1
+        alertsSuppressed: 1,
       });
     }
 
-    if (pathname === "/api/debate/ops/observability/metrics-dictionary" && request.method() === "GET") {
+    if (
+      pathname === "/api/debate/ops/observability/metrics-dictionary" &&
+      request.method() === "GET"
+    ) {
       return json(route, 200, {
         version: "v1",
         generatedAtMs: 1767229800000,
@@ -513,7 +612,7 @@ async function installAuthMocks(page: Page) {
             unit: "count",
             aggregation: "sum",
             description: "Judge dispatch failed delivery total.",
-            target: null
+            target: null,
           },
           {
             key: "judge.dispatch.callback_latency_p95_ms",
@@ -522,13 +621,16 @@ async function installAuthMocks(page: Page) {
             unit: "ms",
             aggregation: "p95",
             description: "Dispatch accepted to callback completed latency p95.",
-            target: "<300000"
-          }
-        ]
+            target: "<300000",
+          },
+        ],
       });
     }
 
-    if (pathname === "/api/debate/ops/observability/slo-snapshot" && request.method() === "GET") {
+    if (
+      pathname === "/api/debate/ops/observability/slo-snapshot" &&
+      request.method() === "GET"
+    ) {
       return json(route, 200, {
         windowMinutes: 30,
         generatedAtMs: 1767229800000,
@@ -540,7 +642,7 @@ async function installAuthMocks(page: Page) {
           successRatePct: 93.1,
           avgDispatchAttempts: 1.5,
           p95LatencyMs: 218,
-          pendingDlqCount: 1
+          pendingDlqCount: 1,
         },
         rules: [
           {
@@ -553,7 +655,7 @@ async function installAuthMocks(page: Page) {
             suppressed: true,
             lastEmittedStatus: "raised",
             message: "success rate below threshold",
-            metrics: { successRatePct: 93.1, threshold: 95 }
+            metrics: { successRatePct: 93.1, threshold: 95 },
           },
           {
             alertKey: "judge.dispatch.retry.high",
@@ -565,13 +667,16 @@ async function installAuthMocks(page: Page) {
             suppressed: false,
             lastEmittedStatus: "cleared",
             message: "retry ratio healthy",
-            metrics: { retryRatio: 1.2, threshold: 1.8 }
-          }
-        ]
+            metrics: { retryRatio: 1.2, threshold: 1.8 },
+          },
+        ],
       });
     }
 
-    if (pathname === "/api/debate/ops/observability/split-readiness" && request.method() === "GET") {
+    if (
+      pathname === "/api/debate/ops/observability/split-readiness" &&
+      request.method() === "GET"
+    ) {
       return json(route, 200, {
         generatedAtMs: 1767229800000,
         overallStatus: "watch",
@@ -585,31 +690,40 @@ async function installAuthMocks(page: Page) {
             recommendation: "reduce retries and DLQ pending count",
             evidence: {
               failedCount: 2,
-              pendingDlqCount: 1
-            }
+              pendingDlqCount: 1,
+            },
           },
           {
             key: "payment_compliance_review",
             title: "Payment compliance review",
-            status: splitReviewState.paymentComplianceRequired ? "ready" : "watch",
+            status: splitReviewState.paymentComplianceRequired
+              ? "ready"
+              : "watch",
             triggered: splitReviewState.paymentComplianceRequired !== true,
-            recommendation: "confirm payment compliance gate before service split",
+            recommendation:
+              "confirm payment compliance gate before service split",
             evidence: {
-              paymentComplianceRequired: splitReviewState.paymentComplianceRequired,
+              paymentComplianceRequired:
+                splitReviewState.paymentComplianceRequired,
               reviewNote: splitReviewState.reviewNote,
               updatedBy: splitReviewState.updatedBy,
-              updatedAt: splitReviewState.updatedAt
-            }
-          }
-        ]
+              updatedAt: splitReviewState.updatedAt,
+            },
+          },
+        ],
       });
     }
 
-    if (pathname === "/api/debate/ops/observability/split-readiness/review" && request.method() === "PUT") {
+    if (
+      pathname === "/api/debate/ops/observability/split-readiness/review" &&
+      request.method() === "PUT"
+    ) {
       const paymentRaw = body?.paymentComplianceRequired;
       const noteRaw = body?.reviewNote;
       const paymentComplianceRequired =
-        paymentRaw === null || paymentRaw === undefined ? null : Boolean(paymentRaw);
+        paymentRaw === null || paymentRaw === undefined
+          ? null
+          : Boolean(paymentRaw);
       const reviewNote = typeof noteRaw === "string" ? noteRaw.trim() : "";
       if (reviewNote.length > 1000) {
         return json(route, 400, { error: "split_review_note_too_long" });
@@ -623,7 +737,7 @@ async function installAuthMocks(page: Page) {
         paymentComplianceRequired,
         reviewNote,
         updatedBy: 10,
-        createdAt: "2026-01-01T01:33:00Z"
+        createdAt: "2026-01-01T01:33:00Z",
       });
       return json(route, 200, {
         generatedAtMs: 1767229980000,
@@ -638,46 +752,101 @@ async function installAuthMocks(page: Page) {
             recommendation: "reduce retries and DLQ pending count",
             evidence: {
               failedCount: 2,
-              pendingDlqCount: 1
-            }
+              pendingDlqCount: 1,
+            },
           },
           {
             key: "payment_compliance_review",
             title: "Payment compliance review",
             status: paymentComplianceRequired ? "ready" : "watch",
             triggered: paymentComplianceRequired !== true,
-            recommendation: "confirm payment compliance gate before service split",
+            recommendation:
+              "confirm payment compliance gate before service split",
             evidence: {
               paymentComplianceRequired,
               reviewNote,
               updatedBy: splitReviewState.updatedBy,
-              updatedAt: splitReviewState.updatedAt
-            }
-          }
-        ]
+              updatedAt: splitReviewState.updatedAt,
+            },
+          },
+        ],
       });
     }
 
-    if (pathname === "/api/debate/ops/observability/split-readiness/reviews" && request.method() === "GET") {
+    if (
+      pathname === "/api/debate/ops/observability/split-readiness/reviews" &&
+      request.method() === "GET"
+    ) {
+      const updatedByParam = requestUrl.searchParams.get("updatedBy");
+      const updatedByRaw =
+        updatedByParam === null || updatedByParam === ""
+          ? null
+          : Number(updatedByParam);
+      const paymentComplianceRaw = requestUrl.searchParams.get(
+        "paymentComplianceRequired",
+      );
+      const createdAfter = requestUrl.searchParams.get("createdAfter") || "";
+      const createdBefore = requestUrl.searchParams.get("createdBefore") || "";
       const limitRaw = Number(requestUrl.searchParams.get("limit") || 3);
       const offsetRaw = Number(requestUrl.searchParams.get("offset") || 0);
-      const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.floor(limitRaw)) : 3;
-      const offset = Number.isFinite(offsetRaw) ? Math.max(0, Math.floor(offsetRaw)) : 0;
-      const sliced = splitReviewAudits.slice(offset, offset + limit);
+      const limit = Number.isFinite(limitRaw)
+        ? Math.max(1, Math.floor(limitRaw))
+        : 3;
+      const offset = Number.isFinite(offsetRaw)
+        ? Math.max(0, Math.floor(offsetRaw))
+        : 0;
+      const filtered = splitReviewAudits.filter((item) => {
+        if (
+          updatedByRaw !== null &&
+          Number.isFinite(updatedByRaw) &&
+          item.updatedBy !== updatedByRaw
+        ) {
+          return false;
+        }
+        if (
+          paymentComplianceRaw === "true" &&
+          item.paymentComplianceRequired !== true
+        ) {
+          return false;
+        }
+        if (
+          paymentComplianceRaw === "false" &&
+          item.paymentComplianceRequired !== false
+        ) {
+          return false;
+        }
+        if (createdAfter && item.createdAt < createdAfter) {
+          return false;
+        }
+        if (createdBefore && item.createdAt > createdBefore) {
+          return false;
+        }
+        return true;
+      });
+      const sliced = filtered.slice(offset, offset + limit);
       return json(route, 200, {
-        total: splitReviewAudits.length,
+        total: filtered.length,
         limit,
         offset,
-        items: sliced
+        items: sliced,
       });
     }
 
-    if (pathname === "/api/debate/ops/observability/alerts" && request.method() === "GET") {
-      const statusFilter = (requestUrl.searchParams.get("status") || "").trim().toLowerCase();
+    if (
+      pathname === "/api/debate/ops/observability/alerts" &&
+      request.method() === "GET"
+    ) {
+      const statusFilter = (requestUrl.searchParams.get("status") || "")
+        .trim()
+        .toLowerCase();
       const limitRaw = Number(requestUrl.searchParams.get("limit") || 5);
       const offsetRaw = Number(requestUrl.searchParams.get("offset") || 0);
-      const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.floor(limitRaw)) : 5;
-      const offset = Number.isFinite(offsetRaw) ? Math.max(0, Math.floor(offsetRaw)) : 0;
+      const limit = Number.isFinite(limitRaw)
+        ? Math.max(1, Math.floor(limitRaw))
+        : 5;
+      const offset = Number.isFinite(offsetRaw)
+        ? Math.max(0, Math.floor(offsetRaw))
+        : 0;
       const filtered = statusFilter
         ? opsAlertItems.filter((item) => item.alertStatus === statusFilter)
         : [...opsAlertItems];
@@ -686,13 +855,17 @@ async function installAuthMocks(page: Page) {
         total: filtered.length,
         limit,
         offset,
-        items: paged
+        items: paged,
       });
     }
 
-    const upsertRoleMatch = pathname.match(/^\/api\/debate\/ops\/rbac\/roles\/(\d+)$/);
+    const upsertRoleMatch = pathname.match(
+      /^\/api\/debate\/ops\/rbac\/roles\/(\d+)$/,
+    );
     if (upsertRoleMatch?.[1] && request.method() === "PUT") {
-      const expectedRevision = String(request.headers()["if-match"] || "").trim();
+      const expectedRevision = String(
+        request.headers()["if-match"] || "",
+      ).trim();
       if (!expectedRevision) {
         return json(route, 400, { error: "ops_rbac_if_match_required" });
       }
@@ -700,17 +873,23 @@ async function installAuthMocks(page: Page) {
         return json(route, 409, { error: "ops_rbac_revision_conflict" });
       }
       const targetUserId = Number(upsertRoleMatch[1]);
-      const role = String(body?.role || "").trim().toLowerCase();
+      const role = String(body?.role || "")
+        .trim()
+        .toLowerCase();
       if (!["ops_admin", "ops_reviewer", "ops_viewer"].includes(role)) {
         return json(route, 400, { error: "invalid_role" });
       }
       const nowIso = "2026-01-01T01:15:00Z";
-      const existing = opsRoleAssignments.find((item) => item.userId === targetUserId);
+      const existing = opsRoleAssignments.find(
+        (item) => item.userId === targetUserId,
+      );
       if (existing) {
         existing.role = role as "ops_admin" | "ops_reviewer" | "ops_viewer";
         existing.updatedAt = nowIso;
         rotateOpsRbacRevision();
-        return json(route, 200, existing, { "x-rbac-revision": opsRbacRevision });
+        return json(route, 200, existing, {
+          "x-rbac-revision": opsRbacRevision,
+        });
       }
       const created = {
         userId: targetUserId,
@@ -719,16 +898,20 @@ async function installAuthMocks(page: Page) {
         role: role as "ops_admin" | "ops_reviewer" | "ops_viewer",
         grantedBy: 10,
         createdAt: nowIso,
-        updatedAt: nowIso
+        updatedAt: nowIso,
       };
       opsRoleAssignments.unshift(created);
       rotateOpsRbacRevision();
       return json(route, 200, created, { "x-rbac-revision": opsRbacRevision });
     }
 
-    const revokeRoleMatch = pathname.match(/^\/api\/debate\/ops\/rbac\/roles\/(\d+)$/);
+    const revokeRoleMatch = pathname.match(
+      /^\/api\/debate\/ops\/rbac\/roles\/(\d+)$/,
+    );
     if (revokeRoleMatch?.[1] && request.method() === "DELETE") {
-      const expectedRevision = String(request.headers()["if-match"] || "").trim();
+      const expectedRevision = String(
+        request.headers()["if-match"] || "",
+      ).trim();
       if (!expectedRevision) {
         return json(route, 400, { error: "ops_rbac_if_match_required" });
       }
@@ -736,16 +919,23 @@ async function installAuthMocks(page: Page) {
         return json(route, 409, { error: "ops_rbac_revision_conflict" });
       }
       const targetUserId = Number(revokeRoleMatch[1]);
-      const index = opsRoleAssignments.findIndex((item) => item.userId === targetUserId);
+      const index = opsRoleAssignments.findIndex(
+        (item) => item.userId === targetUserId,
+      );
       const removed = index >= 0;
       if (removed) {
         opsRoleAssignments.splice(index, 1);
       }
       rotateOpsRbacRevision();
-      return json(route, 200, {
-        userId: targetUserId,
-        removed
-      }, { "x-rbac-revision": opsRbacRevision });
+      return json(
+        route,
+        200,
+        {
+          userId: targetUserId,
+          removed,
+        },
+        { "x-rbac-revision": opsRbacRevision },
+      );
     }
 
     if (pathname === "/api/debate/sessions" && request.method() === "GET") {
@@ -764,22 +954,25 @@ async function installAuthMocks(page: Page) {
             hotScore: 8,
             createdAt: "2026-01-01T00:00:00Z",
             updatedAt: "2026-01-01T00:00:00Z",
-            joinable: true
-          }
+            joinable: true,
+          },
         ],
         hasMore: false,
         nextCursor: null,
-        revision: "session_rev_1"
+        revision: "session_rev_1",
       });
     }
 
-    if (pathname.match(/^\/api\/debate\/sessions\/\d+\/join$/) && request.method() === "POST") {
+    if (
+      pathname.match(/^\/api\/debate\/sessions\/\d+\/join$/) &&
+      request.method() === "POST"
+    ) {
       return json(route, 200, {
         sessionId: 901,
         side: body?.side === "con" ? "con" : "pro",
         newlyJoined: true,
         proCount: body?.side === "con" ? 1 : 2,
-        conCount: body?.side === "con" ? 2 : 1
+        conCount: body?.side === "con" ? 2 : 1,
       });
     }
 
@@ -794,12 +987,12 @@ async function installAuthMocks(page: Page) {
             userId: 10,
             side: "pro",
             content: "Opening statement from PRO.",
-            createdAt: "2026-01-01T01:03:00Z"
-          }
+            createdAt: "2026-01-01T01:03:00Z",
+          },
         ],
         hasMore: false,
         nextCursor: null,
-        revision: "2001"
+        revision: "2001",
       });
     }
 
@@ -810,7 +1003,55 @@ async function installAuthMocks(page: Page) {
         items: pins,
         hasMore: false,
         nextCursor: null,
-        revision: String(pins[0]?.id || "0")
+        revision: String(pins[0]?.id || "0"),
+      });
+    }
+
+    const npcActionListSessionId = matchSessionPath(pathname, "npc/actions");
+    if (npcActionListSessionId && request.method() === "GET") {
+      const actions = getOrCreateNpcActions(npcActionListSessionId);
+      return json(route, 200, {
+        items: actions,
+        hasMore: false,
+        nextCursor: null,
+      });
+    }
+
+    const npcPublicCallSessionId = matchSessionPath(
+      pathname,
+      "npc/public-calls",
+    );
+    if (npcPublicCallSessionId && request.method() === "POST") {
+      return json(route, 200, {
+        id: 4401,
+        sessionId: npcPublicCallSessionId,
+        userId: 10,
+        npcId: "virtual_judge_default",
+        callType: body?.callType || "issue_summary",
+        content: body?.content || "please review",
+        status: "queued",
+        createdAt: "2026-01-01T01:07:00Z",
+        updatedAt: "2026-01-01T01:07:00Z",
+      });
+    }
+
+    const npcFeedbackMatch = pathname.match(
+      /^\/api\/debate\/sessions\/(\d+)\/npc\/actions\/(\d+)\/feedback$/,
+    );
+    if (
+      npcFeedbackMatch?.[1] &&
+      npcFeedbackMatch?.[2] &&
+      request.method() === "POST"
+    ) {
+      return json(route, 200, {
+        id: 4501,
+        actionId: Number(npcFeedbackMatch[2]),
+        sessionId: Number(npcFeedbackMatch[1]),
+        userId: 10,
+        feedbackType: body?.feedbackType || "helpful",
+        comment: body?.comment || null,
+        createdAt: "2026-01-01T01:08:00Z",
+        updatedAt: "2026-01-01T01:08:00Z",
       });
     }
 
@@ -823,11 +1064,13 @@ async function installAuthMocks(page: Page) {
         userId: 10,
         side: "pro",
         content: body?.content || "new message",
-        createdAt: "2026-01-01T01:06:00Z"
+        createdAt: "2026-01-01T01:06:00Z",
       });
     }
 
-    const pinMessageMatch = pathname.match(/^\/api\/debate\/messages\/(\d+)\/pin$/);
+    const pinMessageMatch = pathname.match(
+      /^\/api\/debate\/messages\/(\d+)\/pin$/,
+    );
     if (pinMessageMatch?.[1] && request.method() === "POST") {
       const messageId = Number(pinMessageMatch[1]);
       const pinSeconds = Math.max(1, Number(body?.pinSeconds || 60));
@@ -847,7 +1090,7 @@ async function installAuthMocks(page: Page) {
         pinSeconds,
         pinnedAt: "2026-01-01T01:08:00Z",
         expiresAt: "2026-01-01T01:09:00Z",
-        status: "active"
+        status: "active",
       });
       walletLedger.unshift({
         id: nextLedgerId++,
@@ -858,9 +1101,9 @@ async function installAuthMocks(page: Page) {
         idempotencyKey: String(body?.idempotencyKey || `pin_${messageId}`),
         metadata: {
           messageId,
-          pinSeconds
+          pinSeconds,
         },
-        createdAt: "2026-01-01T01:08:00Z"
+        createdAt: "2026-01-01T01:08:00Z",
       });
       return json(route, 200, {
         pinId,
@@ -871,7 +1114,7 @@ async function installAuthMocks(page: Page) {
         walletBalance,
         pinSeconds,
         expiresAt: "2026-01-01T01:09:00Z",
-        newlyPinned: true
+        newlyPinned: true,
       });
     }
 
@@ -883,7 +1126,7 @@ async function installAuthMocks(page: Page) {
           status: "judging",
           finalDispatchDiagnostics: null,
           finalDispatchFailureStats: null,
-          finalReport: null
+          finalReport: null,
         });
       }
       return json(route, 200, {
@@ -904,7 +1147,7 @@ async function installAuthMocks(page: Page) {
           needsDrawVote: true,
           dimensionScores: {
             logic: { pro: 8, con: 8 },
-            evidence: { pro: 8, con: 8 }
+            evidence: { pro: 8, con: 8 },
           },
           verdictEvidenceRefs: [],
           phaseRollupSummary: [],
@@ -913,8 +1156,8 @@ async function installAuthMocks(page: Page) {
           auditAlerts: [],
           errorCodes: [],
           degradationLevel: 0,
-          createdAt: "2026-01-01T01:20:00Z"
-        }
+          createdAt: "2026-01-01T01:20:00Z",
+        },
       });
     }
 
@@ -929,7 +1172,7 @@ async function installAuthMocks(page: Page) {
         reason: null,
         queuedPhaseJobs: 3,
         queuedFinalJob: true,
-        triggerMode: "manual"
+        triggerMode: "manual",
       });
     }
 
@@ -939,7 +1182,7 @@ async function installAuthMocks(page: Page) {
         return json(route, 200, {
           sessionId: drawVoteSessionId,
           status: "absent",
-          vote: null
+          vote: null,
         });
       }
       const state = getOrCreateDrawVoteState(drawVoteSessionId);
@@ -951,7 +1194,8 @@ async function installAuthMocks(page: Page) {
           finalReportId: 5001,
           status: state.status,
           resolution: state.resolution,
-          decisionSource: state.status === "open" ? "awaiting_threshold" : "majority",
+          decisionSource:
+            state.status === "open" ? "awaiting_threshold" : "majority",
           thresholdPercent: 60,
           eligibleVoters: 2,
           requiredVoters: 2,
@@ -961,12 +1205,15 @@ async function installAuthMocks(page: Page) {
           votingEndsAt: state.votingEndsAt,
           decidedAt: state.decidedAt,
           myVote: state.myVote,
-          rematchSessionId: state.rematchSessionId
-        }
+          rematchSessionId: state.rematchSessionId,
+        },
       });
     }
 
-    const drawVoteSubmitSessionId = matchSessionPath(pathname, "draw-vote/ballots");
+    const drawVoteSubmitSessionId = matchSessionPath(
+      pathname,
+      "draw-vote/ballots",
+    );
     if (drawVoteSubmitSessionId && request.method() === "POST") {
       if (!judgeReadySessions.has(drawVoteSubmitSessionId)) {
         return json(route, 409, { error: "draw_vote_absent" });
@@ -999,9 +1246,9 @@ async function installAuthMocks(page: Page) {
           votingEndsAt: state.votingEndsAt,
           decidedAt: state.decidedAt,
           myVote: state.myVote,
-          rematchSessionId: state.rematchSessionId
+          rematchSessionId: state.rematchSessionId,
         },
-        newlySubmitted: true
+        newlySubmitted: true,
       });
     }
 
@@ -1009,14 +1256,17 @@ async function installAuthMocks(page: Page) {
       return json(route, 200, {
         items: [
           { productId: "coins_60", coins: 60, isActive: true },
-          { productId: "coins_180", coins: 180, isActive: true }
+          { productId: "coins_180", coins: 180, isActive: true },
         ],
         revision: "iap_rev_1",
-        emptyReason: null
+        emptyReason: null,
       });
     }
 
-    if (pathname === "/api/pay/iap/orders/by-transaction" && request.method() === "GET") {
+    if (
+      pathname === "/api/pay/iap/orders/by-transaction" &&
+      request.method() === "GET"
+    ) {
       const transactionId = requestUrl.searchParams.get("transactionId") || "";
       if (transactionId === "tx-verified-001") {
         return json(route, 200, {
@@ -1028,10 +1278,10 @@ async function installAuthMocks(page: Page) {
             verifyReason: null,
             productId: "coins_180",
             coins: 180,
-            credited: true
+            credited: true,
           },
           probeStatus: "verified_credited",
-          nextRetryAfterMs: null
+          nextRetryAfterMs: null,
         });
       }
       if (transactionId === "tx-pending-001") {
@@ -1044,17 +1294,17 @@ async function installAuthMocks(page: Page) {
             verifyReason: "apple_pending",
             productId: "coins_60",
             coins: 60,
-            credited: false
+            credited: false,
           },
           probeStatus: "pending_credit",
-          nextRetryAfterMs: 1200
+          nextRetryAfterMs: 1200,
         });
       }
       return json(route, 200, {
         found: false,
         order: null,
         probeStatus: "not_found",
-        nextRetryAfterMs: null
+        nextRetryAfterMs: null,
       });
     }
 
@@ -1066,11 +1316,12 @@ async function installAuthMocks(page: Page) {
           ? walletLedger.slice(0, 2)
           : walletLedger.filter((item) => item.id < lastId).slice(0, 2);
       const tail = items[items.length - 1]?.id ?? null;
-      const hasMore = tail != null ? walletLedger.some((item) => item.id < tail) : false;
+      const hasMore =
+        tail != null ? walletLedger.some((item) => item.id < tail) : false;
       return json(route, 200, {
         items,
         nextLastId: tail,
-        hasMore
+        hasMore,
       });
     }
 
@@ -1079,7 +1330,7 @@ async function installAuthMocks(page: Page) {
         userId: 10,
         balance: walletBalance,
         walletRevision: "wallet_rev_1",
-        walletInitialized: true
+        walletInitialized: true,
       });
     }
 
@@ -1094,11 +1345,17 @@ test.beforeEach(async ({ page }) => {
 test("@smoke password login lands on home", async ({ page }) => {
   await page.goto("/login");
 
-  await expect(page.getByRole("heading", { name: "EchoIsle Frontend is now React + TypeScript strict." })).toBeVisible();
+  await expect(
+    page.getByRole("heading", {
+      name: "EchoIsle Frontend is now React + TypeScript strict.",
+    }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Sign In" }).click();
 
   await expect(page).toHaveURL(/\/home$/);
-  await expect(page.getByRole("heading", { name: "Mac/Web Migration Workbench" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Mac/Web Migration Workbench" }),
+  ).toBeVisible();
 });
 
 test("@smoke otp login lands on home", async ({ page }) => {
@@ -1112,7 +1369,9 @@ test("@smoke otp login lands on home", async ({ page }) => {
   await page.getByRole("button", { name: "Sign In with OTP" }).click();
 
   await expect(page).toHaveURL(/\/home$/);
-  await expect(page.getByRole("heading", { name: "Mac/Web Migration Workbench" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Mac/Web Migration Workbench" }),
+  ).toBeVisible();
 });
 
 test("@smoke wechat bind flow reaches home", async ({ page }) => {
@@ -1120,22 +1379,30 @@ test("@smoke wechat bind flow reaches home", async ({ page }) => {
 
   await page.getByRole("button", { name: "WeChat" }).click();
   await page.getByRole("button", { name: "Get Challenge" }).click();
-  await expect(page.getByText("Challenge ready, appId=wx_app_smoke")).toBeVisible();
+  await expect(
+    page.getByText("Challenge ready, appId=wx_app_smoke"),
+  ).toBeVisible();
   await page.getByLabel("WeChat Auth Code").fill("wx-code-smoke");
   await page.getByRole("button", { name: "Sign In with WeChat" }).click();
 
   await expect(page).toHaveURL(/\/bind-phone$/);
-  await expect(page.getByRole("heading", { name: "WeChat Phone Binding" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "WeChat Phone Binding" }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Send Code" }).click();
   await expect(page.getByText("Debug code: 445566")).toBeVisible();
   await page.getByLabel("SMS Code").fill("445566");
   await page.getByRole("button", { name: "Bind Phone" }).click();
 
   await expect(page).toHaveURL(/\/home$/);
-  await expect(page.getByRole("heading", { name: "Mac/Web Migration Workbench" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Mac/Web Migration Workbench" }),
+  ).toBeVisible();
 });
 
-test("@smoke lobby should render sessions and support join", async ({ page }) => {
+test("@smoke lobby should render sessions and support join", async ({
+  page,
+}) => {
   await page.goto("/login");
   await page.getByRole("button", { name: "Sign In" }).click();
 
@@ -1143,18 +1410,26 @@ test("@smoke lobby should render sessions and support join", async ({ page }) =>
   await page.getByRole("link", { name: "Lobby" }).click();
 
   await expect(page).toHaveURL(/\/debate$/);
-  await expect(page.getByRole("heading", { name: "Debate Lobby" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Debate Lobby" }),
+  ).toBeVisible();
   await expect(page.getByText("AI should regulate itself")).toBeVisible();
   await page.getByRole("button", { name: "Join Pro" }).click();
   await expect(page).toHaveURL(/\/debate\/sessions\/901$/);
-  await expect(page.getByRole("heading", { name: "Debate Room #901" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Debate Room #901" }),
+  ).toBeVisible();
   await expect(page.getByText("Opening statement from PRO.")).toBeVisible();
-  await page.getByPlaceholder("Share your argument...").fill("My realtime argument");
+  await page
+    .getByPlaceholder("Share your argument...")
+    .fill("My realtime argument");
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByText("My realtime argument")).toBeVisible();
 });
 
-test("@smoke room judge-draw flow should support rematch jump", async ({ page }) => {
+test("@smoke room judge-draw flow should support rematch jump", async ({
+  page,
+}) => {
   await page.goto("/login");
   await page.getByRole("button", { name: "Sign In" }).click();
 
@@ -1172,7 +1447,9 @@ test("@smoke room judge-draw flow should support rematch jump", async ({ page })
   await expect(page.getByText("Resolution: open_rematch")).toBeVisible();
   await page.getByRole("button", { name: "Go To Rematch #902" }).click();
   await expect(page).toHaveURL(/\/debate\/sessions\/902$/);
-  await expect(page.getByRole("heading", { name: "Debate Room #902" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Debate Room #902" }),
+  ).toBeVisible();
 });
 
 test("@smoke room should pin message and consume wallet", async ({ page }) => {
@@ -1189,7 +1466,40 @@ test("@smoke room should pin message and consume wallet", async ({ page }) => {
   await expect(page.getByText("balance=160")).toBeVisible();
 });
 
-test("@smoke wallet page should render products ledger and probe", async ({ page }) => {
+test("@smoke room virtual judge npc should support history public call and feedback", async ({
+  page,
+}) => {
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Sign In" }).click();
+
+  await expect(page).toHaveURL(/\/home$/);
+  await page.getByRole("link", { name: "Lobby" }).click();
+  await page.getByRole("button", { name: "Join Pro" }).click();
+
+  await expect(page).toHaveURL(/\/debate\/sessions\/901$/);
+  await expect(
+    page.getByRole("heading", { name: "Virtual Judge NPC" }),
+  ).toBeVisible();
+  await expect(page.getByText("Live NPC")).toBeVisible();
+  await expect(
+    page.locator(".echo-npc-latest").getByText("That rebuttal landed cleanly."),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Helpful" }).first().click();
+  await expect(page.getByText("NPC feedback recorded: helpful.")).toBeVisible();
+
+  await page.locator(".echo-npc-call select").selectOption("pause_review");
+  await page
+    .getByPlaceholder("Call the NPC in public...")
+    .fill("Please review whether this room needs a pause.");
+  await page.getByRole("button", { name: "Call" }).click();
+
+  await expect(page.getByText("NPC call queued: queued.")).toBeVisible();
+});
+
+test("@smoke wallet page should render products ledger and probe", async ({
+  page,
+}) => {
   await page.goto("/login");
   await page.getByRole("button", { name: "Sign In" }).click();
 
@@ -1197,7 +1507,9 @@ test("@smoke wallet page should render products ledger and probe", async ({ page
   await page.getByRole("link", { name: "Wallet" }).click();
 
   await expect(page).toHaveURL(/\/wallet$/);
-  await expect(page.getByRole("heading", { name: "Wallet & Top-Up" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Wallet & Top-Up" }),
+  ).toBeVisible();
   await expect(page.getByText("coins_180")).toBeVisible();
   await page.getByLabel("Transaction ID").fill("tx-verified-001");
   await page.getByRole("button", { name: "Probe Order" }).click();
@@ -1206,7 +1518,9 @@ test("@smoke wallet page should render products ledger and probe", async ({ page
   await expect(page.getByText("#7001 | iap_credit")).toBeVisible();
 });
 
-test("@smoke wallet probe pending order should show retry hint", async ({ page }) => {
+test("@smoke wallet probe pending order should show retry hint", async ({
+  page,
+}) => {
   await page.goto("/login");
   await page.getByRole("button", { name: "Sign In" }).click();
 
@@ -1220,7 +1534,9 @@ test("@smoke wallet probe pending order should show retry hint", async ({ page }
   await expect(page.getByText("Next Retry: 1200 ms")).toBeVisible();
 });
 
-test("@smoke ops console should show rbac and support role upsert/revoke", async ({ page }) => {
+test("@smoke ops console should show rbac and support role upsert/revoke", async ({
+  page,
+}) => {
   await page.goto("/login");
   await page.getByRole("button", { name: "Sign In" }).click();
 
@@ -1228,7 +1544,9 @@ test("@smoke ops console should show rbac and support role upsert/revoke", async
   await page.getByRole("link", { name: "Ops" }).click();
 
   await expect(page).toHaveURL(/\/ops$/);
-  await expect(page.getByRole("heading", { name: "Ops Console" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Ops Console" }),
+  ).toBeVisible();
   await expect(page.getByText("role_manage")).toBeVisible();
   await expect(page.getByText("#11 | ops_reviewer")).toBeVisible();
 
@@ -1241,43 +1559,91 @@ test("@smoke ops console should show rbac and support role upsert/revoke", async
   await expect(page.getByText("#42 | ops_admin")).toHaveCount(0);
   await expect(page.getByText("SLO Success Rate")).toBeVisible();
   await expect(page.getByText("judge.dispatch.failed_total")).toBeVisible();
-  await expect(page.getByText("next step: stabilize dispatch error budget before split")).toBeVisible();
+  await expect(
+    page.getByText("next step: stabilize dispatch error budget before split"),
+  ).toBeVisible();
   await page.getByLabel("Alert Page Size").selectOption("1");
-  await expect(page.getByText("#501 | judge.success_rate.low | suppressed")).toBeVisible();
+  await expect(
+    page.getByText("#501 | judge.success_rate.low | suppressed"),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Next Alerts" }).click();
-  await expect(page.getByText("#500 | judge.dispatch.retry.high | cleared")).toBeVisible();
+  await expect(
+    page.getByText("#500 | judge.dispatch.retry.high | cleared"),
+  ).toBeVisible();
   await page.getByLabel("Alert Status").selectOption("raised");
-  await expect(page.getByText("#499 | judge.dispatch.latency.high | raised")).toBeVisible();
+  await expect(
+    page.getByText("#499 | judge.dispatch.latency.high | raised"),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Refresh Snapshot" }).click();
-  await expect(page.getByText("Observability snapshot refreshed.")).toBeVisible();
+  await expect(
+    page.getByText("Observability snapshot refreshed."),
+  ).toBeVisible();
   await page.getByLabel("Threshold lowSuccessRateThreshold").fill("92");
   await page.getByRole("button", { name: "Save Thresholds" }).click();
-  await expect(page.getByText("Observability thresholds updated.")).toBeVisible();
-  await expect(page.getByLabel("Threshold lowSuccessRateThreshold")).toHaveValue("92");
+  await expect(
+    page.getByText("Observability thresholds updated."),
+  ).toBeVisible();
+  await expect(
+    page.getByLabel("Threshold lowSuccessRateThreshold"),
+  ).toHaveValue("92");
   await page.getByLabel("Suppress Minutes").fill("7");
-  await page.getByRole("button", { name: "Suppress judge.dispatch.retry.high" }).click();
-  await expect(page.getByText("Anomaly action applied: suppress judge.dispatch.retry.high.")).toBeVisible();
+  await page
+    .getByRole("button", { name: "Suppress judge.dispatch.retry.high" })
+    .click();
+  await expect(
+    page.getByText(
+      "Anomaly action applied: suppress judge.dispatch.retry.high.",
+    ),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Evaluate Dry Run" }).click();
-  await expect(page.getByText("Ops evaluation dry-run: raised=0, cleared=0, suppressed=1.")).toBeVisible();
+  await expect(
+    page.getByText(
+      "Ops evaluation dry-run: raised=0, cleared=0, suppressed=1.",
+    ),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Evaluate Once" }).click();
-  await expect(page.getByText("Ops evaluation run: raised=1, cleared=0, suppressed=1.")).toBeVisible();
-  await page.getByLabel("Split Review Payment Compliance").selectOption("required");
-  await page.getByLabel("Split Review Note").fill("manual compliance review passed");
+  await expect(
+    page.getByText("Ops evaluation run: raised=1, cleared=0, suppressed=1."),
+  ).toBeVisible();
+  await page
+    .getByLabel("Split Review Payment Compliance")
+    .selectOption("required");
+  await page
+    .getByLabel("Split Review Note")
+    .fill("manual compliance review passed");
   await page.getByRole("button", { name: "Save Split Review" }).click();
   await expect(page.getByText("Split readiness review updated.")).toBeVisible();
-  await expect(page.getByText(/#9003 \| compliance: required \| by #10 \| at .+ \| note: manual compliance review passed/)).toBeVisible();
-  await expect(page.getByText(/note: manual compliance review passed/)).toBeVisible();
-  await page.getByLabel("Split Review Compliance Filter").selectOption("required");
-  await page.getByLabel("Split Review Keyword Filter").fill("manual compliance");
-  await page.getByLabel("Split Review Created After ISO").fill("2026-01-01T01:32:00Z");
-  await page.getByLabel("Split Review Created Before ISO").fill("2026-01-01T01:34:00Z");
-  await expect(page.getByText(/#9003 \| compliance: required \| by #10 \| at .+ \| note: manual compliance review passed/)).toBeVisible();
+  await expect(
+    page.getByText(
+      /#9003 \| compliance: required \| by #10 \| at .+ \| note: manual compliance review passed/,
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByText(/note: manual compliance review passed/),
+  ).toBeVisible();
+  await page
+    .getByLabel("Split Review Compliance Filter")
+    .selectOption("required");
+  await page.getByLabel("Split Review Updated By Filter").fill("10");
+  await page
+    .getByLabel("Split Review Created After ISO")
+    .fill("2026-01-01T01:32:00Z");
+  await page
+    .getByLabel("Split Review Created Before ISO")
+    .fill("2026-01-01T01:34:00Z");
+  await expect(
+    page.getByText(
+      /#9003 \| compliance: required \| by #10 \| at .+ \| note: manual compliance review passed/,
+    ),
+  ).toBeVisible();
   await expect(page.getByText("#9002 | compliance: required")).toHaveCount(0);
   await page.getByRole("button", { name: "Clear Audit Filters" }).click();
   await expect(page.getByText("#9002 | compliance: required")).toBeVisible();
 });
 
-test("@auth-error pin should show insufficient wallet balance error", async ({ page }) => {
+test("@auth-error pin should show insufficient wallet balance error", async ({
+  page,
+}) => {
   await page.route("**/api/debate/messages/*/pin", async (route) => {
     await json(route, 409, { error: "wallet_balance_insufficient" });
   });
@@ -1294,7 +1660,9 @@ test("@auth-error pin should show insufficient wallet balance error", async ({ p
   await expect(page.getByText("wallet_balance_insufficient")).toBeVisible();
 });
 
-test("@auth-error ops console should degrade when judge review permission missing", async ({ page }) => {
+test("@auth-error ops console should degrade when judge review permission missing", async ({
+  page,
+}) => {
   await page.route("**/api/debate/ops/rbac/me", async (route) => {
     await json(route, 200, {
       userId: 10,
@@ -1304,9 +1672,9 @@ test("@auth-error ops console should degrade when judge review permission missin
         debateManage: false,
         judgeReview: false,
         judgeRejudge: false,
-        roleManage: false
+        roleManage: false,
       },
-      rbacRevision: "rbac_rev_auth_error"
+      rbacRevision: "rbac_rev_auth_error",
     });
   });
 
@@ -1315,41 +1683,76 @@ test("@auth-error ops console should degrade when judge review permission missin
   await expect(page).toHaveURL(/\/home$/);
   await page.getByRole("link", { name: "Ops" }).click();
   await expect(page).toHaveURL(/\/ops$/);
-  await expect(page.getByText("Role management requires `role_manage` permission from platform owner scope.")).toBeVisible();
-  await expect(page.getByText("Observability panels require `judge_review` permission.")).toBeVisible();
+  await expect(
+    page.getByText(
+      "Role management requires `role_manage` permission from platform owner scope.",
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Observability panels require `judge_review` permission."),
+  ).toBeVisible();
 });
 
-test("@auth-error ops console should show alerts permission error when backend rejects", async ({ page }) => {
-  await page.route("**/api/debate/ops/observability/alerts**", async (route) => {
-    await json(route, 409, { error: "ops_permission_denied:judge_review:backend_policy_mismatch" });
-  });
+test("@auth-error ops console should show alerts permission error when backend rejects", async ({
+  page,
+}) => {
+  await page.route(
+    "**/api/debate/ops/observability/alerts**",
+    async (route) => {
+      await json(route, 409, {
+        error: "ops_permission_denied:judge_review:backend_policy_mismatch",
+      });
+    },
+  );
 
   await page.goto("/login");
   await page.getByRole("button", { name: "Sign In" }).click();
   await expect(page).toHaveURL(/\/home$/);
   await page.getByRole("link", { name: "Ops" }).click();
   await expect(page).toHaveURL(/\/ops$/);
-  await expect(page.getByText("ops_permission_denied:judge_review:backend_policy_mismatch")).toBeVisible();
+  await expect(
+    page.getByText(
+      "ops_permission_denied:judge_review:backend_policy_mismatch",
+    ),
+  ).toBeVisible();
 });
 
-test("@auth-error ops anomaly action should show permission error when backend rejects", async ({ page }) => {
-  await page.route("**/api/debate/ops/observability/anomaly-state/actions**", async (route) => {
-    await json(route, 409, { error: "ops_permission_denied:judge_review:anomaly_action" });
-  });
+test("@auth-error ops anomaly action should show permission error when backend rejects", async ({
+  page,
+}) => {
+  await page.route(
+    "**/api/debate/ops/observability/anomaly-state/actions**",
+    async (route) => {
+      await json(route, 409, {
+        error: "ops_permission_denied:judge_review:anomaly_action",
+      });
+    },
+  );
 
   await page.goto("/login");
   await page.getByRole("button", { name: "Sign In" }).click();
   await expect(page).toHaveURL(/\/home$/);
   await page.getByRole("link", { name: "Ops" }).click();
   await expect(page).toHaveURL(/\/ops$/);
-  await page.getByRole("button", { name: "Acknowledge judge.success_rate.low" }).click();
-  await expect(page.getByText("ops_permission_denied:judge_review:anomaly_action")).toBeVisible();
+  await page
+    .getByRole("button", { name: "Acknowledge judge.success_rate.low" })
+    .click();
+  await expect(
+    page.getByText("ops_permission_denied:judge_review:anomaly_action"),
+  ).toBeVisible();
 });
 
-test("@auth-error ops evaluate-once should show rate-limit grade when backend returns 429", async ({ page }) => {
-  await page.route("**/api/debate/ops/observability/evaluate-once**", async (route) => {
-    await json(route, 429, { error: "ops_observability_evaluate_once_rate_limited" });
-  });
+test("@auth-error ops evaluate-once should show rate-limit grade when backend returns 429", async ({
+  page,
+}) => {
+  await page.route(
+    "**/api/debate/ops/observability/evaluate-once**",
+    async (route) => {
+      await json(route, 429, {
+        error: "ops_observability_evaluate_once_rate_limited",
+      });
+    },
+  );
 
   await page.goto("/login");
   await page.getByRole("button", { name: "Sign In" }).click();
@@ -1358,14 +1761,23 @@ test("@auth-error ops evaluate-once should show rate-limit grade when backend re
   await expect(page).toHaveURL(/\/ops$/);
   await page.getByRole("button", { name: "Evaluate Once" }).click();
   await expect(
-    page.getByText("Evaluate run rejected [rate_limit]: ops_observability_evaluate_once_rate_limited.")
+    page.getByText(
+      "Evaluate run rejected [rate_limit]: ops_observability_evaluate_once_rate_limited.",
+    ),
   ).toBeVisible();
 });
 
-test("@auth-error ops evaluate-once should show bad-request grade when backend returns 400", async ({ page }) => {
-  await page.route("**/api/debate/ops/observability/evaluate-once**", async (route) => {
-    await json(route, 400, { error: "invalid_observability_evaluate_once_query" });
-  });
+test("@auth-error ops evaluate-once should show bad-request grade when backend returns 400", async ({
+  page,
+}) => {
+  await page.route(
+    "**/api/debate/ops/observability/evaluate-once**",
+    async (route) => {
+      await json(route, 400, {
+        error: "invalid_observability_evaluate_once_query",
+      });
+    },
+  );
 
   await page.goto("/login");
   await page.getByRole("button", { name: "Sign In" }).click();
@@ -1374,56 +1786,90 @@ test("@auth-error ops evaluate-once should show bad-request grade when backend r
   await expect(page).toHaveURL(/\/ops$/);
   await page.getByRole("button", { name: "Evaluate Dry Run" }).click();
   await expect(
-    page.getByText("Evaluate dry-run rejected [bad_request]: invalid_observability_evaluate_once_query.")
+    page.getByText(
+      "Evaluate dry-run rejected [bad_request]: invalid_observability_evaluate_once_query.",
+    ),
   ).toBeVisible();
 });
 
-test("@auth-error ops split review save should show permission error when backend rejects", async ({ page }) => {
-  await page.route("**/api/debate/ops/observability/split-readiness/review", async (route) => {
-    await json(route, 409, { error: "ops_permission_denied:judge_review:split_review_update" });
-  });
+test("@auth-error ops split review save should show permission error when backend rejects", async ({
+  page,
+}) => {
+  await page.route(
+    "**/api/debate/ops/observability/split-readiness/review",
+    async (route) => {
+      await json(route, 409, {
+        error: "ops_permission_denied:judge_review:split_review_update",
+      });
+    },
+  );
 
   await page.goto("/login");
   await page.getByRole("button", { name: "Sign In" }).click();
   await expect(page).toHaveURL(/\/home$/);
   await page.getByRole("link", { name: "Ops" }).click();
   await expect(page).toHaveURL(/\/ops$/);
-  await page.getByLabel("Split Review Payment Compliance").selectOption("required");
-  await page.getByLabel("Split Review Note").fill("attempt update with denied permission");
+  await page
+    .getByLabel("Split Review Payment Compliance")
+    .selectOption("required");
+  await page
+    .getByLabel("Split Review Note")
+    .fill("attempt update with denied permission");
   await page.getByRole("button", { name: "Save Split Review" }).click();
   await expect(
     page.getByText(
-      "Split review save rejected [permission_conflict]: ops_permission_denied:judge_review:split_review_update."
-    )
+      "Split review save rejected [permission_conflict]: ops_permission_denied:judge_review:split_review_update.",
+    ),
   ).toBeVisible();
 });
 
-test("@auth-error ops split review save should show bad-request grade when backend returns 400", async ({ page }) => {
-  await page.route("**/api/debate/ops/observability/split-readiness/review", async (route) => {
-    await json(route, 400, { error: "split_review_note_too_long" });
-  });
+test("@auth-error ops split review save should show bad-request grade when backend returns 400", async ({
+  page,
+}) => {
+  await page.route(
+    "**/api/debate/ops/observability/split-readiness/review",
+    async (route) => {
+      await json(route, 400, { error: "split_review_note_too_long" });
+    },
+  );
 
   await page.goto("/login");
   await page.getByRole("button", { name: "Sign In" }).click();
   await expect(page).toHaveURL(/\/home$/);
   await page.getByRole("link", { name: "Ops" }).click();
   await expect(page).toHaveURL(/\/ops$/);
-  await page.getByLabel("Split Review Payment Compliance").selectOption("required");
-  await page.getByLabel("Split Review Note").fill("attempt update with too long note");
+  await page
+    .getByLabel("Split Review Payment Compliance")
+    .selectOption("required");
+  await page
+    .getByLabel("Split Review Note")
+    .fill("attempt update with too long note");
   await page.getByRole("button", { name: "Save Split Review" }).click();
-  await expect(page.getByText("Split review save rejected [bad_request]: split_review_note_too_long.")).toBeVisible();
+  await expect(
+    page.getByText(
+      "Split review save rejected [bad_request]: split_review_note_too_long.",
+    ),
+  ).toBeVisible();
 });
 
-test("@auth-error ops console should aggregate observability multi-endpoint failures", async ({ page }) => {
+test("@auth-error ops console should aggregate observability multi-endpoint failures", async ({
+  page,
+}) => {
   await page.route("**/api/debate/ops/observability/slo**", async (route) => {
     await json(route, 409, { error: "ops_permission_denied:judge_review:slo" });
   });
-  await page.route("**/api/debate/ops/observability/metrics-dictionary**", async (route) => {
-    await json(route, 500, { error: "metrics_dictionary_unavailable" });
-  });
-  await page.route("**/api/debate/ops/observability/split-readiness", async (route) => {
-    await json(route, 503, { error: "split_readiness_unavailable" });
-  });
+  await page.route(
+    "**/api/debate/ops/observability/metrics-dictionary**",
+    async (route) => {
+      await json(route, 500, { error: "metrics_dictionary_unavailable" });
+    },
+  );
+  await page.route(
+    "**/api/debate/ops/observability/split-readiness",
+    async (route) => {
+      await json(route, 503, { error: "split_readiness_unavailable" });
+    },
+  );
 
   await page.goto("/login");
   await page.getByRole("button", { name: "Sign In" }).click();
@@ -1431,13 +1877,21 @@ test("@auth-error ops console should aggregate observability multi-endpoint fail
   await page.getByRole("link", { name: "Ops" }).click();
   await expect(page).toHaveURL(/\/ops$/);
 
-  await expect(page.getByText("Observability snapshot partially unavailable (3 errors).")).toBeVisible();
-  await expect(page.getByText("ops_permission_denied:judge_review:slo")).toBeVisible();
+  await expect(
+    page.getByText("Observability snapshot partially unavailable (3 errors)."),
+  ).toBeVisible();
+  await expect(
+    page.getByText("ops_permission_denied:judge_review:slo"),
+  ).toBeVisible();
   await expect(page.getByText("metrics_dictionary_unavailable")).toBeVisible();
-  await expect(page.getByText("split_readiness_unavailable").first()).toBeVisible();
+  await expect(
+    page.getByText("split_readiness_unavailable").first(),
+  ).toBeVisible();
 });
 
-test("@auth-error ops console should cap and truncate observability error details", async ({ page }) => {
+test("@auth-error ops console should cap and truncate observability error details", async ({
+  page,
+}) => {
   const longConfigError = `obs_config_error_long_prefix_${"x".repeat(220)}`;
 
   await page.route("**/api/debate/ops/observability/config", async (route) => {
@@ -1446,15 +1900,26 @@ test("@auth-error ops console should cap and truncate observability error detail
   await page.route("**/api/debate/ops/observability/slo**", async (route) => {
     await json(route, 409, { error: "ops_permission_denied:judge_review:slo" });
   });
-  await page.route("**/api/debate/ops/observability/metrics-dictionary**", async (route) => {
-    await json(route, 500, { error: "metrics_dictionary_unavailable" });
-  });
-  await page.route("**/api/debate/ops/observability/split-readiness", async (route) => {
-    await json(route, 503, { error: "split_readiness_unavailable" });
-  });
-  await page.route("**/api/debate/ops/observability/alerts**", async (route) => {
-    await json(route, 500, { error: "alerts_feed_unavailable_due_to_backend_timeout" });
-  });
+  await page.route(
+    "**/api/debate/ops/observability/metrics-dictionary**",
+    async (route) => {
+      await json(route, 500, { error: "metrics_dictionary_unavailable" });
+    },
+  );
+  await page.route(
+    "**/api/debate/ops/observability/split-readiness",
+    async (route) => {
+      await json(route, 503, { error: "split_readiness_unavailable" });
+    },
+  );
+  await page.route(
+    "**/api/debate/ops/observability/alerts**",
+    async (route) => {
+      await json(route, 500, {
+        error: "alerts_feed_unavailable_due_to_backend_timeout",
+      });
+    },
+  );
 
   await page.goto("/login");
   await page.getByRole("button", { name: "Sign In" }).click();
@@ -1462,17 +1927,27 @@ test("@auth-error ops console should cap and truncate observability error detail
   await page.getByRole("link", { name: "Ops" }).click();
   await expect(page).toHaveURL(/\/ops$/);
 
-  await expect(page.getByText("Observability snapshot partially unavailable (5 errors).")).toBeVisible();
-  await expect(page.getByText("ops_permission_denied:judge_review:slo")).toBeVisible();
+  await expect(
+    page.getByText("Observability snapshot partially unavailable (5 errors)."),
+  ).toBeVisible();
+  await expect(
+    page.getByText("ops_permission_denied:judge_review:slo"),
+  ).toBeVisible();
   await expect(page.getByText("metrics_dictionary_unavailable")).toBeVisible();
-  await expect(page.getByText("split_readiness_unavailable").first()).toBeVisible();
+  await expect(
+    page.getByText("split_readiness_unavailable").first(),
+  ).toBeVisible();
   await expect(page.getByText("1 more errors hidden.")).toBeVisible();
   await expect(page.getByText(longConfigError)).toHaveCount(0);
   await expect(page.getByText(/obs_config_error_long_prefix_x+/)).toBeVisible();
-  await expect(page.getByText("alerts_feed_unavailable_due_to_backend_timeout")).toHaveCount(0);
+  await expect(
+    page.getByText("alerts_feed_unavailable_due_to_backend_timeout"),
+  ).toHaveCount(0);
 });
 
-test("@auth-error password invalid credentials should stay on login", async ({ page }) => {
+test("@auth-error password invalid credentials should stay on login", async ({
+  page,
+}) => {
   await page.route("**/api/auth/v2/signin/password", async (route) => {
     await json(route, 401, { error: "invalid_credentials" });
   });
@@ -1484,7 +1959,9 @@ test("@auth-error password invalid credentials should stay on login", async ({ p
   await expect(page.getByText("invalid_credentials")).toBeVisible();
 });
 
-test("@auth-error otp send cooldown should show rate limit error", async ({ page }) => {
+test("@auth-error otp send cooldown should show rate limit error", async ({
+  page,
+}) => {
   await page.route("**/api/auth/v2/sms/send", async (route) => {
     await json(route, 429, { error: "sms_send_cooldown" });
   });
@@ -1498,7 +1975,9 @@ test("@auth-error otp send cooldown should show rate limit error", async ({ page
   await expect(page.getByText("sms_send_cooldown")).toBeVisible();
 });
 
-test("@auth-error wechat bind should show invalid ticket error", async ({ page }) => {
+test("@auth-error wechat bind should show invalid ticket error", async ({
+  page,
+}) => {
   await page.route("**/api/auth/v2/wechat/bind-phone", async (route) => {
     await json(route, 400, { error: "invalid_wechat_ticket" });
   });

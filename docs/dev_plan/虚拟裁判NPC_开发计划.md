@@ -29,8 +29,8 @@
 2. 让观战用户也能实时感知 NPC，同时保持发言权限隔离。
 3. 已补齐运营控制、用户反馈、公开呼叫、近期行为记录等 PRD 中的核心产品能力。
 4. 已强化真实 LLM 主路径的成本、延迟、熔断、观测和可回滚能力。
-5. 形成真实多服务浏览器 smoke 与可观测性证据。
-6. 对暂停 / 恢复辩论强动作先完成状态机设计评审，再决定是否进入实现切片。
+5. 已形成仓内可复验的浏览器 smoke、后端 targeted tests 与可观测性基线证据。
+6. 已对暂停 / 恢复辩论强动作完成状态机设计门禁，结论为先做暂停建议，强暂停 / 恢复需审批与 `chat` 状态机承载。
 
 ## 2. 冻结边界
 
@@ -72,10 +72,12 @@
 9. 真实 LLM canary、成本 / 延迟观测、熔断、`no_action` 静默和 rule fallback 边界已具备自动化验证。
 10. NPC 动态形象、状态差异、动作强度、低动效和移动端布局已完成首版增强。
 
+11. 运行态 smoke 与观测基线已完成仓内可复验口径，并明确不宣称真实线上 LLM 体验通过。
+
 ### 4.2 后续重点补齐
 
-1. 暂停 / 恢复辩论状态机设计。
-2. 真实多服务运行态 smoke 和 dashboard 基线。
+1. 真实 Beta / staging 环境中的 LLM canary、Kafka consumer、dashboard 聚合和成本上限证据。
+2. 后续若进入暂停实现，先从 `pause_suggestion` 最小闭环开始。
 
 ### 4.3 本阶段仍不直接做
 
@@ -83,7 +85,7 @@
 2. 用户自定义 NPC 模型、Prompt、完整行为脚本。
 3. 用户私聊 NPC 或个人专属辩论建议。
 4. NPC 直接触发正式裁判团。
-5. 未经状态机设计的暂停 / 恢复辩论实现。
+5. 未经独立确认的 `soft_pause/hard_pause/resume` 强动作实现。
 
 ## 5. 执行矩阵
 
@@ -98,15 +100,15 @@
 | P2-E. `virtual-judge-npc-public-call-history-feedback` | 支持用户公开呼叫 NPC、查看近期行为和提交轻量反馈 | 已完成 | 已采用 NPC 面板公开请求入口，chat 作为事实源，npc_service 消费公开呼叫事件 |
 | P2-F. `virtual-judge-npc-llm-canary-cost-latency-guard` | 强化真实 LLM 主路径：provider canary、成本/延迟预算、熔断和回滚 | 已完成 | npc_service 已补 LLM canary、熔断、成本/延迟指标、`no_action` 和内部 metrics 查询 |
 | P2-G. `virtual-judge-npc-visual-experience-polish` | 增强动态形象、动效分级、低动效和移动端表现 | 已完成 | NPC 面板已补动态形象、状态色、动作强度、reduced motion 和移动端稳定布局 |
-| P3-H. `virtual-judge-npc-pause-state-machine-design-gate` | 完成暂停 / 恢复辩论强动作状态机设计与评审 | 待执行 | 先设计再实现，不在本模块中默认写强动作代码 |
-| P3-I. `virtual-judge-npc-observability-runtime-smoke` | 建立 dashboard 基线与真实多服务浏览器 smoke 证据 | 待执行 | 消化 C47 的 runtime smoke 和 observability 债务 |
+| P3-H. `virtual-judge-npc-pause-state-machine-design-gate` | 完成暂停 / 恢复辩论强动作状态机设计与评审 | 已完成 | 已输出暂停状态机设计，明确 NPC 首版只能建议，强动作需审批与 `chat` 状态机执行 |
+| P3-I. `virtual-judge-npc-observability-runtime-smoke` | 建立 dashboard 基线与运行态 smoke 证据 | 已完成 | 已新增运行态 smoke 与观测基线文档，补齐 chat candidate 日志指标和前端 NPC browser smoke；真实部署 canary 进入 Beta 环境门禁 |
 | P4-J. `virtual-judge-npc-beta-stage-closure` | 阶段收口，回写 completed/todo 并归档计划 | 待执行 | 只在主体切片完成后执行 |
 
 ## 6. 下一开发模块建议
 
-1. 下一步执行 P3-H `virtual-judge-npc-pause-state-machine-design-gate`。
-2. P3-H 暂停状态机只做设计门禁；设计未通过前不实现 NPC pause tool。
-3. P3-I 作为 Beta 验收前的统一运行态证据切片。
+1. 下一步执行 P4-J `virtual-judge-npc-beta-stage-closure`。
+2. P4-J 汇总本阶段主体成果，回写 completed/todo 并归档活动计划。
+3. 暂停强动作实现不并入本阶段；如后续进入实现，应先执行 `pause_suggestion` 最小闭环。
 
 ## 7. 模块详情
 
@@ -430,12 +432,21 @@
 2. 状态机测试计划。
 3. 关键边界与 PRD 对齐检查。
 
+完成结果：
+
+1. 新增 [虚拟裁判NPC_暂停恢复状态机设计.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_暂停恢复状态机设计.md)。
+2. 设计明确 `pause_review` 是用户公开呼叫，`pause_suggestion` 是 NPC 可生成的公开建议，二者均不改变房间状态。
+3. 设计明确 `soft_pause`、`hard_pause`、`resume` 属于强动作，必须由 `chat` 房间状态机执行，并由运营 / 管理员 / 系统规则批准和审计。
+4. 设计建议暂停态不复用 `debate_sessions.status`，而采用暂停事件表与当前投影，避免污染房间生命周期状态。
+5. 设计建议首版暂停期间禁用普通 `session_messages`，未来若允许暂停讨论，应新增独立消息类型或独立讨论区。
+6. 设计明确 `allow_pause=true` 只表示允许 NPC 生成暂停建议或待审批请求，不表示允许 LLM 直接暂停或恢复辩论。
+
 ### P3-I. `virtual-judge-npc-observability-runtime-smoke`
 
 目标：
 
 1. 建立 NPC dashboard / metrics / log baseline。
-2. 形成真实多服务运行态 smoke 证据。
+2. 形成仓内可复验运行态 smoke 证据，并明确真实部署 canary 的后续门禁。
 3. 验证 LLM fallback、WS replay、观战可见、服务不可用和正式裁决隔离。
 
 执行范围：
@@ -471,6 +482,14 @@
 3. `post-module-test-guard --mode full`。
 4. `git diff --check`。
 
+完成结果：
+
+1. 新增 [虚拟裁判NPC_运行态Smoke与观测基线.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_运行态Smoke与观测基线.md)，记录 P3-I 的观测入口、smoke 覆盖、运行证据和判定口径。
+2. `chat` 内部 NPC candidate handler 增加 `request/accepted/rejected/replayed/failed` 计数日志、`action_uid`、`status`、`reason_code` 和 `latency_ms`，用于回答“哪个 candidate 失败 / 为什么拒绝 / 是否幂等 replay”。
+3. 前端 Web smoke 增加虚拟裁判 NPC 房间用例，覆盖历史 hydration、公开呼叫和私有反馈；同时修正 Ops observability smoke mock 的权限、revision 和 split review 筛选语义。
+4. 本轮验证通过 `npc_service` targeted pytest、`chat-server npc_action` 15 tests、`notify-server` NPC replay / 观战 tests、前端 NPC targeted smoke、完整 Web smoke 10/10、格式与 diff 检查。
+5. 本轮没有宣称真实线上 OpenAI、真实 Kafka consumer 部署环境和真实 dashboard 聚合已经通过；这些作为 Beta / staging 环境门禁继续保留。
+
 ### P4-J. `virtual-judge-npc-beta-stage-closure`
 
 目标：
@@ -494,14 +513,15 @@
 2. `notify_server` 改动：优先覆盖观战 WS ACL、participant 权限不回归、replay、ack、dedupe。
 3. `npc_service` 改动：优先覆盖 event consumer、offset/retry/DLQ、LLM provider、fallback、guard、chat callback。
 4. 前端改动：优先覆盖 NPC reducer、观战态、公开呼叫、反馈、动态形象、reduced motion 和 Judge / Draw 区隔。
-5. 运行态：至少完成一次多服务 smoke，覆盖用户发言 -> NPC action -> WS replay -> 观战可见 -> LLM fallback -> 服务不可用不阻塞。
+5. 运行态：本阶段已完成仓内浏览器 smoke 与后端 targeted runtime evidence；真实 Beta / staging 环境仍需补充用户发言 -> NPC action -> WS replay -> 观战可见 -> LLM fallback -> 服务不可用不阻塞的部署证据。
 6. 文档同步：如果代码结构、主入口或第一跳定位变化，检查 [docs/architecture/README.md](/Users/panyihang/Documents/EchoIsle/docs/architecture/README.md) 是否需要更新。
 
 ## 9. 当前待决问题
 
 1. 线上 LLM canary 的真实模型、配额和成本上限最终值需在部署环境确认；默认关闭 / 回滚策略已写入运行手册。
 2. 后续是否引入 Lottie / 图片序列等更复杂 NPC 资产，需等首版 CSS 动效运行反馈。
-3. 暂停 / 恢复是否由 NPC 直接触发，还是只能提出暂停建议并等待运营确认。
+3. P3-H 已给出暂停门禁结论：首个实现切片只建议做 `pause_suggestion`；`soft_pause/hard_pause/resume` 需单独确认并走审批与状态机。
+4. P3-I 已建立仓内观测基线；真实 Kafka / LLM / dashboard 聚合证据需在 Beta / staging 环境补齐。
 
 ## 10. 同步历史
 
@@ -516,3 +536,5 @@
 - 2026-05-04：完成 P2-E `virtual-judge-npc-public-call-history-feedback`；chat 新增公开呼叫、近期行为和私有反馈事实源/API，npc_service 支持公开呼叫事件与 `publicCall` context，前端 NPC 面板增加公开请求、近期行为 hydration 和反馈入口；下一步执行 P2-F `virtual-judge-npc-llm-canary-cost-latency-guard`。
 - 2026-05-04：完成 P2-F `virtual-judge-npc-llm-canary-cost-latency-guard`；npc_service 新增 LLM canary、成本 / 延迟 / token metrics、provider 错误码、连续失败熔断、`no_action` 静默和内部 metrics 查询；运行手册写入 module_design；下一步执行 P2-G `virtual-judge-npc-visual-experience-polish`。
 - 2026-05-04：完成 P2-G `virtual-judge-npc-visual-experience-polish`；前端 NPC 面板新增动态形象状态环、动作强度、状态色、发言 / 赞赏 / 特效动效、reduced motion 降级和移动端稳定布局；下一步执行 P3-H 暂停状态机设计门禁。
+- 2026-05-04：完成 P3-H `virtual-judge-npc-pause-state-machine-design-gate`；新增暂停 / 恢复状态机设计，明确 NPC 首版只生成暂停建议，`soft_pause/hard_pause/resume` 必须由 `chat` 状态机和审批边界执行；下一步执行 P3-I 运行态 smoke 与可观测性基线。
+- 2026-05-04：完成 P3-I `virtual-judge-npc-observability-runtime-smoke`；新增运行态 smoke 与观测基线文档，`chat` candidate handler 补充日志指标，前端 NPC smoke 覆盖历史 / 公开呼叫 / 反馈，后端 targeted tests 与完整 Web smoke 通过；下一步执行 P4-J 阶段收口。

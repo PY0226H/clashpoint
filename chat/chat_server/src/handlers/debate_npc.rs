@@ -7,6 +7,65 @@ use axum::{
 };
 use chat_core::User;
 use serde_json::Value;
+use std::{
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        LazyLock,
+    },
+    time::Instant,
+};
+
+struct DebateNpcActionCandidateMetrics {
+    request_total: AtomicU64,
+    accepted_total: AtomicU64,
+    rejected_total: AtomicU64,
+    replayed_total: AtomicU64,
+    failed_total: AtomicU64,
+}
+
+impl DebateNpcActionCandidateMetrics {
+    const fn new() -> Self {
+        Self {
+            request_total: AtomicU64::new(0),
+            accepted_total: AtomicU64::new(0),
+            rejected_total: AtomicU64::new(0),
+            replayed_total: AtomicU64::new(0),
+            failed_total: AtomicU64::new(0),
+        }
+    }
+
+    fn observe_start(&self) {
+        self.request_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_output(&self, accepted: bool, status: &str) {
+        if accepted {
+            self.accepted_total.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.rejected_total.fetch_add(1, Ordering::Relaxed);
+        }
+        if status == "replayed" {
+            self.replayed_total.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn observe_failed(&self) {
+        self.failed_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> (u64, u64, u64, u64, u64) {
+        (
+            self.request_total.load(Ordering::Relaxed),
+            self.accepted_total.load(Ordering::Relaxed),
+            self.rejected_total.load(Ordering::Relaxed),
+            self.replayed_total.load(Ordering::Relaxed),
+            self.failed_total.load(Ordering::Relaxed),
+        )
+    }
+}
+
+static DEBATE_NPC_ACTION_CANDIDATE_METRICS: LazyLock<DebateNpcActionCandidateMetrics> =
+    LazyLock::new(DebateNpcActionCandidateMetrics::new);
 
 #[utoipa::path(
     get,
@@ -193,6 +252,47 @@ pub(crate) async fn submit_debate_npc_action_candidate_handler(
     State(state): State<AppState>,
     Json(payload): Json<Value>,
 ) -> Result<impl IntoResponse, AppError> {
-    let ret = state.submit_debate_npc_action_candidate(payload).await?;
-    Ok((StatusCode::OK, Json(ret)))
+    let started_at = Instant::now();
+    DEBATE_NPC_ACTION_CANDIDATE_METRICS.observe_start();
+    let ret = state.submit_debate_npc_action_candidate(payload).await;
+    match ret {
+        Ok(output) => {
+            DEBATE_NPC_ACTION_CANDIDATE_METRICS
+                .observe_output(output.accepted, output.status.as_str());
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            let (request_total, accepted_total, rejected_total, replayed_total, failed_total) =
+                DEBATE_NPC_ACTION_CANDIDATE_METRICS.snapshot();
+            tracing::info!(
+                action_uid = output.action_uid.as_str(),
+                accepted = output.accepted,
+                status = output.status.as_str(),
+                reason_code = output.reason_code.as_deref().unwrap_or("none"),
+                latency_ms,
+                debate_npc_action_candidate_request_total = request_total,
+                debate_npc_action_candidate_accepted_total = accepted_total,
+                debate_npc_action_candidate_rejected_total = rejected_total,
+                debate_npc_action_candidate_replayed_total = replayed_total,
+                debate_npc_action_candidate_failed_total = failed_total,
+                "debate npc action candidate served"
+            );
+            Ok((StatusCode::OK, Json(output)))
+        }
+        Err(err) => {
+            DEBATE_NPC_ACTION_CANDIDATE_METRICS.observe_failed();
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            let (request_total, accepted_total, rejected_total, replayed_total, failed_total) =
+                DEBATE_NPC_ACTION_CANDIDATE_METRICS.snapshot();
+            tracing::warn!(
+                latency_ms,
+                debate_npc_action_candidate_request_total = request_total,
+                debate_npc_action_candidate_accepted_total = accepted_total,
+                debate_npc_action_candidate_rejected_total = rejected_total,
+                debate_npc_action_candidate_replayed_total = replayed_total,
+                debate_npc_action_candidate_failed_total = failed_total,
+                "debate npc action candidate failed: {}",
+                err
+            );
+            Err(err)
+        }
+    }
 }
