@@ -1,7 +1,7 @@
 # 虚拟裁判 NPC 下一阶段开发计划
 
 更新时间：2026-05-04
-文档状态：active，P1-B 已完成
+文档状态：active，P1-C 已完成（env_blocked）
 当前主线：`virtual-judge-npc-beta-real-env-canary-dashboard-closure`
 
 关联 PRD：[虚拟裁判NPC完整PRD.md](/Users/panyihang/Documents/EchoIsle/docs/PRD/虚拟裁判NPC完整PRD.md)
@@ -84,19 +84,19 @@
 | --- | --- | --- | --- |
 | P0-A. `virtual-judge-npc-beta-real-env-plan-current-state` | 基于 PRD、module_design 和当前代码事实生成下一阶段计划 | 已完成 | 本文档即该模块输出；用户已确认执行，default slot 已绑定本主线 |
 | P1-B. `virtual-judge-npc-preflight-working-tree-and-config-baseline` | 开始真实环境前整理上一阶段收口状态、迁移状态、配置清单和执行窗口 | 已完成 | 已输出 [虚拟裁判NPC_Beta真实环境Preflight基线.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_Beta真实环境Preflight基线.md)；本机 DB 迁移为 pending，真实环境输入仍需 P1-C 核验 |
-| P1-C. `virtual-judge-npc-beta-readiness-gate-run` | 按 readiness 清单执行真实环境前置检查，输出 `ready / env_blocked / fail` | 待执行 | 缺 provider、Kafka、服务编排、dashboard、账号任一关键项时直接 `env_blocked` |
-| P1-D. `virtual-judge-npc-single-session-llm-canary-run` | 在单个 Beta / staging 房间跑真实 LLM canary | 待执行（环境具备后） | 验证真实 provider 响应、NPC action 生成、参赛者可见、观战实时 / replay 可见 |
-| P1-E. `virtual-judge-npc-canary-dashboard-evidence-pack` | 固化 dashboard / 日志 / SQL / Kafka / DLQ 查询证据 | 待执行（环境具备后） | 必须能查 executor、fallback reason、callback accepted/rejected/failed、DLQ、latency、cost、circuit |
-| P2-F. `virtual-judge-npc-failure-drill-and-rollback` | 演练真实环境失败路径与回滚 | 待执行（环境具备后） | 覆盖 provider unavailable、canary session 移除、chat candidate rejected、`npc_service` stop |
-| P2-G. `virtual-judge-npc-real-env-evidence-and-release-decision` | 汇总 canary evidence 并给出 release decision | 待执行 | 输出 `pass / env_blocked / fail / rollback_required`，并给出是否进入 Beta 小流量建议 |
+| P1-C. `virtual-judge-npc-beta-readiness-gate-run` | 按 readiness 清单执行真实环境前置检查，输出 `ready / env_blocked / fail` | 已完成（env_blocked） | 已输出 [虚拟裁判NPC_Beta真实环境ReadinessGate证据.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_Beta真实环境ReadinessGate证据.md)；缺真实 provider、Kafka、服务入口、dashboard、账号与 Ops 权限 |
+| P1-D. `virtual-judge-npc-single-session-llm-canary-run` | 在单个 Beta / staging 房间跑真实 LLM canary | 阻塞（env_blocked） | P1-C 未 ready，不执行真实 canary，避免把本地证据误写成真实环境 pass |
+| P1-E. `virtual-judge-npc-canary-dashboard-evidence-pack` | 固化 dashboard / 日志 / SQL / Kafka / DLQ 查询证据 | 阻塞（env_blocked） | 缺 dashboard / 日志 / Kafka 查询入口，无法形成真实 dashboard evidence |
+| P2-F. `virtual-judge-npc-failure-drill-and-rollback` | 演练真实环境失败路径与回滚 | 阻塞（env_blocked） | 缺真实环境、回滚 owner 和执行窗口，不演练故障 |
+| P2-G. `virtual-judge-npc-real-env-evidence-and-release-decision` | 汇总 canary evidence 并给出 release decision | 待执行 | 下一步汇总 `env_blocked` evidence，并给出不进入 Beta 小流量的 release decision |
 | P3-H. `virtual-judge-npc-real-env-findings-remediation` | 针对真实 canary 发现的问题进行最小修复 | 待执行（条件） | 仅在 P1-D/P1-E/P2-F 发现真实缺陷后执行；不得扩展强暂停或新能力 |
 | P4-I. `virtual-judge-npc-beta-real-env-stage-closure` | 阶段收口，回写 completed/todo 并归档计划 | 待执行 | 仅在 evidence 结论明确后执行 |
 
 ### 下一开发模块建议
 
-1. 默认下一步执行 P1-C `virtual-judge-npc-beta-readiness-gate-run`。
-2. 如果 P1-B/P1-C 发现真实环境关键输入缺失，直接产出 `env_blocked` evidence，并跳到 P2-G/P4-I 做阶段收口。
-3. 只有 P1-C 判定 `ready` 后，才执行 P1-D/P1-E/P2-F 的真实 canary 与故障演练。
+1. 默认下一步执行 P2-G `virtual-judge-npc-real-env-evidence-and-release-decision`。
+2. P1-C 已输出 `env_blocked`，因此 P1-D/P1-E/P2-F 暂不执行。
+3. P2-G 应汇总缺失项、下一次触发条件和 Beta 小流量 release decision。
 
 ## 5. 模块详情
 
@@ -174,6 +174,14 @@
 3. Kafka topic / consumer group 能看到目标事件流或明确记录缺失原因。
 4. dashboard / 日志入口能查询 P1-E 所需字段，或明确记录缺失原因。
 5. 任一关键项缺失时输出 `env_blocked`，不继续 P1-D。
+
+完成结果：
+
+1. 已检查当前 shell 的 NPC / OpenAI-compatible provider / Kafka / chat internal key 关键配置键，均未注入。
+2. 已检查本地 `npc_service:6690` 与 `chat:6688` 监听状态，当前均无监听输出。
+3. 已确认仓内存在 `.env` 与历史 evidence env 文件，但本次未读取或输出任何 secret；配置文件存在不能替代真实 Beta / staging 证据。
+4. 已确认缺真实 provider、Kafka、dashboard、canary session、测试账号、Ops 权限、回滚 owner 与目标环境迁移通过证据。
+5. 已将结论写入 [虚拟裁判NPC_Beta真实环境ReadinessGate证据.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_Beta真实环境ReadinessGate证据.md)。
 
 ### P1-D. `virtual-judge-npc-single-session-llm-canary-run`
 
@@ -361,3 +369,4 @@
 
 1. 2026-05-04：生成 `virtual-judge-npc-beta-real-env-canary-dashboard-closure` 下一阶段开发计划；P0-A 已完成，下一步建议执行 P1-B。
 2. 2026-05-04：执行 P1-B preflight，完成工作区、迁移、配置入口、topic 与外部输入缺口基线；下一步建议执行 P1-C readiness gate。
+3. 2026-05-04：执行 P1-C readiness gate，结论为 `env_blocked`；P1-D/P1-E/P2-F 暂停，下一步建议执行 P2-G release decision。
