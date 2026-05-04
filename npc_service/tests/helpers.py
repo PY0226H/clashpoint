@@ -3,7 +3,9 @@ from __future__ import annotations
 from app.models import (
     DebateMessageCreatedTrigger,
     DebateMessageSnapshot,
+    DebateNpcPublicCallCreatedTrigger,
     NpcDecisionContext,
+    NpcPublicCallSnapshot,
     NpcRoomConfig,
 )
 from app.settings import EventConsumerSettings, OpenAIProviderSettings, Settings
@@ -38,7 +40,10 @@ def make_settings(
             source="kafka",
             brokers="127.0.0.1:9092",
             topic_prefix="echoisle",
-            consume_topics=("debate.message.created.v1",),
+            consume_topics=(
+                "debate.message.created.v1",
+                "debate.npc.public_call.created.v1",
+            ),
             group_id="npc-service-test",
             client_id="npc-service-test",
             max_attempts=event_consumer_max_attempts,
@@ -78,6 +83,7 @@ _DEFAULT_TRIGGER: object = object()
 def make_context(
     *,
     trigger_message: DebateMessageSnapshot | None | object = _DEFAULT_TRIGGER,
+    public_call: NpcPublicCallSnapshot | None = None,
     room_config: NpcRoomConfig | None = None,
 ) -> NpcDecisionContext:
     trigger = make_message() if trigger_message is _DEFAULT_TRIGGER else trigger_message
@@ -88,6 +94,7 @@ def make_context(
         roomConfig=room_config or make_room_config(),
         sourceEventId="evt-1",
         triggerMessage=trigger,
+        publicCall=public_call,
         recentMessages=[trigger] if trigger is not None else [],
         now="2026-05-03T00:00:01Z",
     )
@@ -100,6 +107,7 @@ def make_room_config(
     allow_speak: bool = True,
     allow_praise: bool = True,
     allow_effect: bool = True,
+    allow_public_call: bool = False,
 ) -> NpcRoomConfig:
     return NpcRoomConfig(
         sessionId=77,
@@ -113,7 +121,7 @@ def make_room_config(
         allowEffect=allow_effect,
         allowStateChange=True,
         allowWarning=True,
-        allowPublicCall=False,
+        allowPublicCall=allow_public_call,
         allowPause=False,
         manualTakeoverByUserId=None,
         statusReason=None,
@@ -133,4 +141,31 @@ def make_trigger() -> DebateMessageCreatedTrigger:
         content="这段发言把核心矛盾说清楚了，值得回应。",
         createdAt="2026-05-03T00:00:00Z",
         sourceEventId="evt-1",
+    )
+
+
+def make_public_call() -> NpcPublicCallSnapshot:
+    return NpcPublicCallSnapshot(
+        publicCallId=3001,
+        sessionId=77,
+        userId=42,
+        npcId="virtual_judge_default",
+        callType="issue_summary",
+        content="帮忙总结一下当前争议焦点。",
+        status="queued",
+        createdAt="2026-05-03T00:00:02Z",
+    )
+
+
+def make_public_call_trigger() -> DebateNpcPublicCallCreatedTrigger:
+    return DebateNpcPublicCallCreatedTrigger(
+        event="DebateNpcPublicCallCreated",
+        sessionId=77,
+        publicCallId=3001,
+        userId=42,
+        npcId="virtual_judge_default",
+        callType="issue_summary",
+        content="帮忙总结一下当前争议焦点。",
+        createdAt="2026-05-03T00:00:02Z",
+        sourceEventId="evt-call-1",
     )

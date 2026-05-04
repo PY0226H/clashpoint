@@ -26,8 +26,9 @@ class NpcChatClient:
         self,
         *,
         session_id: int,
-        trigger_message_id: int,
-        source_event_id: str | None,
+        trigger_message_id: int | None = None,
+        public_call_id: int | None = None,
+        source_event_id: str | None = None,
         limit: int | None = None,
     ) -> NpcDecisionContext:
         client = self._client
@@ -37,6 +38,7 @@ class NpcChatClient:
                     owned_client,
                     session_id=session_id,
                     trigger_message_id=trigger_message_id,
+                    public_call_id=public_call_id,
                     source_event_id=source_event_id,
                     limit=limit,
                 )
@@ -44,6 +46,7 @@ class NpcChatClient:
             client,
             session_id=session_id,
             trigger_message_id=trigger_message_id,
+            public_call_id=public_call_id,
             source_event_id=source_event_id,
             limit=limit,
         )
@@ -70,11 +73,16 @@ class NpcChatClient:
         client: httpx.AsyncClient,
         *,
         session_id: int,
-        trigger_message_id: int,
-        source_event_id: str | None,
+        trigger_message_id: int | None,
+        public_call_id: int | None,
+        source_event_id: str | None = None,
         limit: int | None,
     ) -> NpcDecisionContext:
-        params: dict[str, object] = {"triggerMessageId": trigger_message_id}
+        params: dict[str, object] = {}
+        if trigger_message_id is not None:
+            params["triggerMessageId"] = trigger_message_id
+        if public_call_id is not None:
+            params["publicCallId"] = public_call_id
         if source_event_id:
             params["sourceEventId"] = source_event_id
         if limit is not None:

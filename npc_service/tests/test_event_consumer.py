@@ -7,20 +7,23 @@ from pathlib import Path
 
 from app.event_consumer import (
     EVENT_TYPE_DEBATE_MESSAGE_CREATED,
+    EVENT_TYPE_DEBATE_NPC_PUBLIC_CALL_CREATED,
     NpcConsumerRecord,
     NpcEventConsumer,
     NpcEventSource,
     debate_message_created_trigger_from_envelope,
+    debate_npc_public_call_created_trigger_from_envelope,
     decode_event_envelope,
     resolve_topic_name,
 )
 from app.models import (
     DebateMessageCreatedTrigger,
+    DebateNpcPublicCallCreatedTrigger,
     NpcDecisionRun,
     NpcEventProcessingRun,
 )
 
-from helpers import make_settings, make_trigger
+from helpers import make_public_call_trigger, make_settings, make_trigger
 
 
 def make_record(*, event_id: str = "evt-1", event_type: str = EVENT_TYPE_DEBATE_MESSAGE_CREATED) -> NpcConsumerRecord:
@@ -50,7 +53,37 @@ def make_record(*, event_id: str = "evt-1", event_type: str = EVENT_TYPE_DEBATE_
     )
 
 
-def silent_run(trigger: DebateMessageCreatedTrigger) -> NpcEventProcessingRun:
+def make_public_call_record(*, event_id: str = "evt-call-1") -> NpcConsumerRecord:
+    trigger = make_public_call_trigger()
+    return NpcConsumerRecord(
+        topic="echoisle.debate.npc.public_call.created.v1",
+        partition=0,
+        offset=43,
+        key="session:77",
+        value=json.dumps(
+            {
+                "eventId": event_id,
+                "eventType": EVENT_TYPE_DEBATE_NPC_PUBLIC_CALL_CREATED,
+                "source": "chat-server",
+                "aggregateId": "session:77",
+                "occurredAt": "2026-05-03T00:00:02Z",
+                "payload": {
+                    "sessionId": trigger.session_id,
+                    "publicCallId": trigger.public_call_id,
+                    "userId": trigger.user_id,
+                    "npcId": trigger.npc_id,
+                    "callType": trigger.call_type,
+                    "content": trigger.content,
+                    "createdAt": trigger.created_at,
+                },
+            }
+        ),
+    )
+
+
+def silent_run(
+    trigger: DebateMessageCreatedTrigger | DebateNpcPublicCallCreatedTrigger,
+) -> NpcEventProcessingRun:
     return NpcEventProcessingRun(
         status="silent",
         trigger=trigger,
@@ -66,11 +99,21 @@ def silent_run(trigger: DebateMessageCreatedTrigger) -> NpcEventProcessingRun:
 class FakeProcessor:
     def __init__(self, runs: list[NpcEventProcessingRun | Exception]) -> None:
         self.runs = runs
-        self.triggers: list[DebateMessageCreatedTrigger] = []
+        self.triggers: list[DebateMessageCreatedTrigger | DebateNpcPublicCallCreatedTrigger] = []
 
     async def handle_debate_message_created(
         self,
         trigger: DebateMessageCreatedTrigger,
+    ) -> NpcEventProcessingRun:
+        self.triggers.append(trigger)
+        next_run = self.runs.pop(0)
+        if isinstance(next_run, Exception):
+            raise next_run
+        return next_run
+
+    async def handle_debate_npc_public_call_created(
+        self,
+        trigger: DebateNpcPublicCallCreatedTrigger,
     ) -> NpcEventProcessingRun:
         self.triggers.append(trigger)
         next_run = self.runs.pop(0)
@@ -112,6 +155,23 @@ def test_consumer_decodes_kafka_envelope_into_debate_message_trigger() -> None:
     )
 
 
+def test_consumer_decodes_public_call_event_into_trigger() -> None:
+    envelope = decode_event_envelope(make_public_call_record(event_id="evt-call-kafka-1"))
+    trigger = debate_npc_public_call_created_trigger_from_envelope(envelope)
+
+    assert trigger == DebateNpcPublicCallCreatedTrigger(
+        event="DebateNpcPublicCallCreated",
+        sessionId=77,
+        publicCallId=3001,
+        userId=42,
+        npcId="virtual_judge_default",
+        callType="issue_summary",
+        content="帮忙总结一下当前争议焦点。",
+        createdAt="2026-05-03T00:00:02Z",
+        sourceEventId="evt-call-kafka-1",
+    )
+
+
 def test_consumer_processes_terminal_event_and_should_commit() -> None:
     async def scenario() -> None:
         record = make_record(event_id="evt-terminal")
@@ -127,6 +187,25 @@ def test_consumer_processes_terminal_event_and_should_commit() -> None:
         assert result.should_commit is True
         assert result.event_id == "evt-terminal"
         assert processor.triggers[0].source_event_id == "evt-terminal"
+
+    asyncio.run(scenario())
+
+
+def test_consumer_processes_public_call_event_and_should_commit() -> None:
+    async def scenario() -> None:
+        record = make_public_call_record(event_id="evt-public-call-terminal")
+        processor = FakeProcessor([silent_run(make_public_call_trigger())])
+        consumer = NpcEventConsumer(
+            settings=make_settings().event_consumer,
+            processor=processor,  # type: ignore[arg-type]
+        )
+
+        result = await consumer.process_record(record)
+
+        assert result.status == "processed_committed"
+        assert result.should_commit is True
+        assert result.event_id == "evt-public-call-terminal"
+        assert processor.triggers[0].source_event_id == "evt-public-call-terminal"
 
     asyncio.run(scenario())
 

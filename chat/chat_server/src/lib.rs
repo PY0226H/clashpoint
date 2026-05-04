@@ -32,9 +32,9 @@ use application::runtime_workers::spawn_background_workers;
 pub use error::{AppError, ErrorOutput};
 pub(crate) use event_bus::{
     DebateMessageCreatedEvent, DebateMessagePinnedEvent, DebateNpcActionCreatedEvent,
-    DebateParticipantJoinedEvent, DebateSessionStatusChangedEvent, DomainEvent, EventBus,
-    EventOutboxRelayConfig, EventOutboxRelayMetrics, EventOutboxRelayReport, EventPublisher,
-    KafkaConsumerRuntimeMetrics,
+    DebateNpcPublicCallCreatedEvent, DebateParticipantJoinedEvent, DebateSessionStatusChangedEvent,
+    DomainEvent, EventBus, EventOutboxRelayConfig, EventOutboxRelayMetrics, EventOutboxRelayReport,
+    EventPublisher, KafkaConsumerRuntimeMetrics,
 };
 use models::JudgeDispatchTrigger;
 pub use models::*;
@@ -245,6 +245,18 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
         .route(
             "/sessions/:id/messages",
             get(list_debate_messages_handler).post(create_debate_message_handler),
+        )
+        .route(
+            "/sessions/:id/npc/actions",
+            get(list_debate_npc_actions_handler),
+        )
+        .route(
+            "/sessions/:id/npc/public-calls",
+            post(create_debate_npc_public_call_handler),
+        )
+        .route(
+            "/sessions/:id/npc/actions/:action_id/feedback",
+            post(submit_debate_npc_action_feedback_handler),
         )
         .route(
             "/sessions/:id/pins",

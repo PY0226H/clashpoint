@@ -11,7 +11,12 @@ from .chat_client import NpcChatClient
 from .event_consumer import run_event_consumer_loop, stop_background_task
 from .event_processor import NpcEventProcessor
 from .executors import LLM_EXECUTOR_KIND, create_default_router
-from .models import DebateMessageCreatedTrigger, NpcDecisionContext, NpcDecisionRun
+from .models import (
+    DebateMessageCreatedTrigger,
+    DebateNpcPublicCallCreatedTrigger,
+    NpcDecisionContext,
+    NpcDecisionRun,
+)
 from .settings import Settings, load_settings
 
 
@@ -81,6 +86,17 @@ def create_app(
         if x_ai_internal_key != settings.ai_internal_key:
             raise HTTPException(status_code=401, detail="invalid internal key")
         return await app.state.event_processor.handle_debate_message_created(trigger)
+
+    @app.post("/api/internal/npc/events/debate-npc-public-call-created")
+    async def handle_debate_npc_public_call_created(
+        trigger: DebateNpcPublicCallCreatedTrigger,
+        x_ai_internal_key: str | None = Header(default=None),
+    ) -> Any:
+        if not settings.event_consumer.webhook_enabled:
+            raise HTTPException(status_code=404, detail="event webhook disabled")
+        if x_ai_internal_key != settings.ai_internal_key:
+            raise HTTPException(status_code=401, detail="invalid internal key")
+        return await app.state.event_processor.handle_debate_npc_public_call_created(trigger)
 
     return app
 

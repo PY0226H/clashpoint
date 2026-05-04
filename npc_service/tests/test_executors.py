@@ -12,7 +12,7 @@ from app.executors import (
 )
 from app.models import NpcDecisionContext
 
-from helpers import make_context, make_message, make_settings
+from helpers import make_context, make_message, make_public_call, make_settings
 
 
 class FakeProvider:
@@ -144,5 +144,23 @@ def test_rule_executor_can_emit_state_changed_for_short_trigger() -> None:
         assert candidate.action_type == "state_changed"
         assert candidate.npc_status == "observing"
         assert candidate.public_text is None
+
+    asyncio.run(scenario())
+
+
+def test_rule_executor_can_answer_public_call_without_private_target() -> None:
+    async def scenario() -> None:
+        settings = make_settings()
+        rule = RuleExecutorV1(settings=settings)
+        context = make_context(trigger_message=None, public_call=make_public_call())
+
+        candidate = await rule.decide(context, fallback_reason="llm_not_configured")
+
+        assert candidate is not None
+        assert candidate.action_type == "speak"
+        assert candidate.public_text is not None
+        assert candidate.target_message_id is None
+        assert candidate.source_message_id is None
+        assert candidate.reason_code == "rule_public_call_response"
 
     asyncio.run(scenario())

@@ -82,7 +82,7 @@
 
 ### 3.2.1 虚拟裁判 NPC（公开房间娱乐角色）
 
-虚拟裁判 NPC 是房间内公开可见的娱乐导向角色，不是赛后官方 AI 裁判团，也不替代正式裁决报告。当前 MVP 已完成 chat 侧 action spine、notify replay 合同、Debate Room 前端展示壳、独立 `npc_service/`、LLM executor router、rule fallback、本地 guard 与 full smoke；下一阶段已完成 `npc_service` Kafka/event-bus consumer 切换、观战实时可见和 Ops 控制面，webhook 默认仅作为 local-dev 入口。
+虚拟裁判 NPC 是房间内公开可见的娱乐导向角色，不是赛后官方 AI 裁判团，也不替代正式裁决报告。当前 MVP 已完成 chat 侧 action spine、notify replay 合同、Debate Room 前端展示壳、独立 `npc_service/`、LLM executor router、rule fallback、本地 guard 与 full smoke；下一阶段已完成 `npc_service` Kafka/event-bus consumer 切换、观战实时可见、Ops 控制面、公开呼叫、近期行为和私有反馈，webhook 默认仅作为 local-dev 入口。
 
 优先看：
 
@@ -104,9 +104,10 @@
 16. [DebateNpcModel.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/components/DebateNpcModel.ts)
 17. [NPC action migration](/Users/panyihang/Documents/EchoIsle/chat/migrations/20260503090000_debate_npc_action_spine.sql)
 18. [NPC ops control migration](/Users/panyihang/Documents/EchoIsle/chat/migrations/20260504100000_debate_npc_ops_control_plane.sql)
-19. [OpsConsolePage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/OpsConsolePage.tsx)
-20. [ops-domain index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/ops-domain/src/index.ts)
-21. [虚拟裁判NPC_开发计划.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/虚拟裁判NPC_开发计划.md)
+19. [NPC public interaction migration](/Users/panyihang/Documents/EchoIsle/chat/migrations/20260504110000_debate_npc_public_call_history_feedback.sql)
+20. [OpsConsolePage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/OpsConsolePage.tsx)
+21. [ops-domain index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/ops-domain/src/index.ts)
+22. [虚拟裁判NPC_开发计划.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/虚拟裁判NPC_开发计划.md)
 
 ### 3.3 AI 裁判 / 报告 / 申诉 / 平局投票
 

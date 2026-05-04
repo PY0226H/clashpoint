@@ -5,9 +5,11 @@ import asyncio
 from .chat_client import NpcChatClient
 from .models import (
     DebateMessageCreatedTrigger,
+    DebateNpcPublicCallCreatedTrigger,
     NpcDecisionContext,
     NpcDecisionRun,
     NpcEventProcessingRun,
+    NpcEventTrigger,
 )
 from .settings import Settings
 
@@ -39,6 +41,25 @@ class NpcEventProcessor:
             trigger_message_id=trigger.message_id,
             source_event_id=trigger.source_event_id,
         )
+        return await self._process_context(context=context, trigger=trigger)
+
+    async def handle_debate_npc_public_call_created(
+        self,
+        trigger: DebateNpcPublicCallCreatedTrigger,
+    ) -> NpcEventProcessingRun:
+        context = await self._chat_client.fetch_decision_context(
+            session_id=trigger.session_id,
+            public_call_id=trigger.public_call_id,
+            source_event_id=trigger.source_event_id,
+        )
+        return await self._process_context(context=context, trigger=trigger)
+
+    async def _process_context(
+        self,
+        *,
+        context: NpcDecisionContext,
+        trigger: NpcEventTrigger,
+    ) -> NpcEventProcessingRun:
         control_plane_decision = _control_plane_silent_decision(context)
         if control_plane_decision is not None:
             return NpcEventProcessingRun(
@@ -93,6 +114,8 @@ def _control_plane_silent_decision(context: NpcDecisionContext) -> NpcDecisionRu
         reason = "npc_disabled"
     elif config.status != "active":
         reason = f"npc_status_{config.status}"
+    elif context.public_call is not None and not config.allow_public_call:
+        reason = "npc_public_call_disabled"
     elif not (config.allow_speak or config.allow_praise or config.allow_effect):
         reason = "npc_public_capabilities_disabled"
     if reason is None:

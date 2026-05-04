@@ -11,11 +11,18 @@ from typing import Any, Protocol
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .event_processor import NpcEventProcessor
-from .models import DebateMessageCreatedTrigger, NpcEventProcessingRun, utc_now_iso
+from .models import (
+    DebateMessageCreatedTrigger,
+    DebateNpcPublicCallCreatedTrigger,
+    NpcEventProcessingRun,
+    utc_now_iso,
+)
 from .settings import EventConsumerSettings
 
 EVENT_TYPE_DEBATE_MESSAGE_CREATED = "debate.message.created"
+EVENT_TYPE_DEBATE_NPC_PUBLIC_CALL_CREATED = "debate.npc.public_call.created"
 TOPIC_DEBATE_MESSAGE_CREATED = "debate.message.created.v1"
+TOPIC_DEBATE_NPC_PUBLIC_CALL_CREATED = "debate.npc.public_call.created.v1"
 TERMINAL_PROCESSING_STATUSES = {
     "submitted",
     "candidate_rejected",
@@ -140,7 +147,10 @@ class NpcEventConsumer:
                 error=str(err),
             )
 
-        if envelope.event_type != EVENT_TYPE_DEBATE_MESSAGE_CREATED:
+        if envelope.event_type not in {
+            EVENT_TYPE_DEBATE_MESSAGE_CREATED,
+            EVENT_TYPE_DEBATE_NPC_PUBLIC_CALL_CREATED,
+        }:
             return NpcConsumerProcessResult(
                 status="ignored_unsupported_event",
                 should_commit=True,
@@ -149,8 +159,14 @@ class NpcEventConsumer:
             )
 
         try:
-            trigger = debate_message_created_trigger_from_envelope(envelope)
-            processing_run = await self._processor.handle_debate_message_created(trigger)
+            if envelope.event_type == EVENT_TYPE_DEBATE_MESSAGE_CREATED:
+                trigger = debate_message_created_trigger_from_envelope(envelope)
+                processing_run = await self._processor.handle_debate_message_created(trigger)
+            else:
+                trigger = debate_npc_public_call_created_trigger_from_envelope(envelope)
+                processing_run = (
+                    await self._processor.handle_debate_npc_public_call_created(trigger)
+                )
         except Exception as err:
             return await self._handle_retryable_failure(
                 record=record,
@@ -318,6 +334,28 @@ def debate_message_created_trigger_from_envelope(
         )
     except (KeyError, ValidationError) as err:
         raise NpcConsumerDecodeError(f"invalid DebateMessageCreated payload: {err}") from err
+
+
+def debate_npc_public_call_created_trigger_from_envelope(
+    envelope: KafkaEventEnvelope,
+) -> DebateNpcPublicCallCreatedTrigger:
+    payload = envelope.payload
+    try:
+        return DebateNpcPublicCallCreatedTrigger(
+            event="DebateNpcPublicCallCreated",
+            sessionId=payload["sessionId"],
+            publicCallId=payload["publicCallId"],
+            userId=payload["userId"],
+            npcId=payload["npcId"],
+            callType=payload["callType"],
+            content=payload["content"],
+            createdAt=payload["createdAt"],
+            sourceEventId=envelope.event_id,
+        )
+    except (KeyError, ValidationError) as err:
+        raise NpcConsumerDecodeError(
+            f"invalid DebateNpcPublicCallCreated payload: {err}"
+        ) from err
 
 
 def resolve_topic_name(prefix: str, base_topic: str) -> str:

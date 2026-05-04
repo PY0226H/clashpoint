@@ -50,7 +50,8 @@ async fn npc_decision_context_should_return_public_room_messages_only() -> Resul
         .get_debate_npc_decision_context(
             session_id as u64,
             GetDebateNpcDecisionContextQuery {
-                trigger_message_id: second.id as u64,
+                trigger_message_id: Some(second.id as u64),
+                public_call_id: None,
                 source_event_id: Some("evt-message-2".to_string()),
                 limit: Some(10),
             },
@@ -63,8 +64,23 @@ async fn npc_decision_context_should_return_public_room_messages_only() -> Resul
     assert!(!context.room_config.enabled);
     assert_eq!(context.room_config.status, "unavailable");
     assert_eq!(context.source_event_id.as_deref(), Some("evt-message-2"));
-    assert_eq!(context.trigger_message.message_id, second.id);
-    assert_eq!(context.trigger_message.content, "second public point");
+    assert_eq!(
+        context
+            .trigger_message
+            .as_ref()
+            .expect("trigger should exist")
+            .message_id,
+        second.id
+    );
+    assert_eq!(
+        context
+            .trigger_message
+            .as_ref()
+            .expect("trigger should exist")
+            .content,
+        "second public point"
+    );
+    assert!(context.public_call.is_none());
     assert_eq!(context.recent_messages.len(), 2);
     assert_eq!(context.recent_messages[0].message_id, first.id);
     assert_eq!(context.recent_messages[1].message_id, second.id);
@@ -87,7 +103,8 @@ async fn npc_decision_context_should_reject_trigger_message_from_other_session()
         .get_debate_npc_decision_context(
             session_id as u64,
             GetDebateNpcDecisionContextQuery {
-                trigger_message_id: other_message.id as u64,
+                trigger_message_id: Some(other_message.id as u64),
+                public_call_id: None,
                 source_event_id: None,
                 limit: Some(10),
             },
@@ -444,6 +461,167 @@ async fn npc_action_candidate_should_reject_official_verdict_fields() -> Result<
     Ok(())
 }
 
+#[tokio::test]
+async fn npc_public_call_should_create_room_public_trigger_context() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
+    seed_npc_config(&state, session_id, true, true, true, true).await?;
+    enable_public_call(&state, session_id, true).await?;
+    let _message = seed_joined_message(
+        &state,
+        session_id,
+        1,
+        "pro",
+        "请注意一下对方刚才的定义切换。",
+    )
+    .await?;
+    let user = state
+        .find_user_by_id(1)
+        .await?
+        .expect("fixture user should exist");
+
+    let call = state
+        .create_debate_npc_public_call(
+            &user,
+            session_id as u64,
+            CreateDebateNpcPublicCallInput {
+                call_type: "issue_summary".to_string(),
+                content: "帮忙概括一下目前争议焦点。".to_string(),
+            },
+        )
+        .await?;
+
+    assert_eq!(call.session_id, session_id);
+    assert_eq!(call.user_id, user.id);
+    assert_eq!(call.status, "queued");
+    assert_eq!(call.call_type, "issue_summary");
+
+    let context = state
+        .get_debate_npc_decision_context(
+            session_id as u64,
+            GetDebateNpcDecisionContextQuery {
+                trigger_message_id: None,
+                public_call_id: Some(call.id as u64),
+                source_event_id: Some("evt-call-1".to_string()),
+                limit: Some(10),
+            },
+        )
+        .await?;
+    assert!(context.trigger_message.is_none());
+    assert_eq!(
+        context
+            .public_call
+            .as_ref()
+            .expect("public call should exist")
+            .content,
+        "帮忙概括一下目前争议焦点。"
+    );
+    assert_eq!(context.recent_messages.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn npc_public_call_should_reject_when_room_gate_disabled() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
+    seed_npc_config(&state, session_id, true, true, true, true).await?;
+    let _message = seed_joined_message(&state, session_id, 1, "pro", "opening").await?;
+    let user = state
+        .find_user_by_id(1)
+        .await?
+        .expect("fixture user should exist");
+
+    let err = state
+        .create_debate_npc_public_call(
+            &user,
+            session_id as u64,
+            CreateDebateNpcPublicCallInput {
+                call_type: "rules_help".to_string(),
+                content: "这个回合规则是什么？".to_string(),
+            },
+        )
+        .await
+        .expect_err("disabled public call gate should reject");
+
+    assert!(matches!(
+        err,
+        AppError::DebateConflict(ref code) if code == "debate_npc_public_call_disabled"
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn npc_action_history_and_feedback_should_expose_public_loop_only() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
+    seed_npc_config(&state, session_id, true, true, true, true).await?;
+    let _message = seed_joined_message(&state, session_id, 1, "pro", "opening").await?;
+    let user = state
+        .find_user_by_id(1)
+        .await?
+        .expect("fixture user should exist");
+
+    let created = state
+        .submit_debate_npc_action_candidate(speak_candidate(
+            "npc-act-history-001",
+            session_id,
+            "我先把现场节奏拉回来：请双方继续围绕论点展开。",
+        ))
+        .await?;
+    let action_id = created.action_id.expect("action should be created");
+
+    let history = state
+        .list_debate_npc_actions(
+            &user,
+            session_id as u64,
+            ListDebateNpcActions {
+                last_id: None,
+                limit: Some(10),
+            },
+        )
+        .await?;
+    assert_eq!(history.items.len(), 1);
+    assert_eq!(history.items[0].action_id, action_id as i64);
+    assert_eq!(history.items[0].action_uid, "npc-act-history-001");
+    assert_eq!(history.items[0].action_type, "speak");
+    assert_eq!(
+        history.items[0].public_text.as_deref(),
+        Some("我先把现场节奏拉回来：请双方继续围绕论点展开。")
+    );
+
+    let first = state
+        .submit_debate_npc_action_feedback(
+            &user,
+            session_id as u64,
+            action_id,
+            SubmitDebateNpcActionFeedbackInput {
+                feedback_type: "helpful".to_string(),
+                comment: Some("节奏提醒有帮助".to_string()),
+            },
+        )
+        .await?;
+    let second = state
+        .submit_debate_npc_action_feedback(
+            &user,
+            session_id as u64,
+            action_id,
+            SubmitDebateNpcActionFeedbackInput {
+                feedback_type: "confusing".to_string(),
+                comment: None,
+            },
+        )
+        .await?;
+
+    assert_eq!(first.id, second.id);
+    assert_eq!(second.feedback_type, "confusing");
+    assert_eq!(second.comment, None);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM debate_npc_action_feedback")
+        .fetch_one(&state.pool)
+        .await?;
+    assert_eq!(count, 1);
+    Ok(())
+}
+
 async fn seed_npc_config(
     state: &AppState,
     session_id: i64,
@@ -489,6 +667,22 @@ async fn seed_npc_config_with_status(
     .bind(config.allow_praise)
     .bind(config.allow_effect)
     .bind(config.allow_state_change)
+    .execute(&state.pool)
+    .await?;
+    Ok(())
+}
+
+async fn enable_public_call(state: &AppState, session_id: i64, allowed: bool) -> Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE debate_npc_room_configs
+        SET allow_public_call = $2
+        WHERE session_id = $1 AND npc_id = $3
+        "#,
+    )
+    .bind(session_id)
+    .bind(allowed)
+    .bind(NPC_ID)
     .execute(&state.pool)
     .await?;
     Ok(())

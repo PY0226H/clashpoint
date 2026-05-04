@@ -28,6 +28,17 @@ class DebateMessageSnapshot(CamelModel):
     created_at: str | None = Field(default=None, alias="createdAt")
 
 
+class NpcPublicCallSnapshot(CamelModel):
+    public_call_id: int = Field(alias="publicCallId")
+    session_id: int = Field(alias="sessionId")
+    user_id: int = Field(alias="userId")
+    npc_id: str = Field(alias="npcId")
+    call_type: str = Field(alias="callType")
+    content: str
+    status: str
+    created_at: str | None = Field(default=None, alias="createdAt")
+
+
 class NpcRoomConfig(CamelModel):
     session_id: int = Field(alias="sessionId")
     npc_id: str = Field(default="virtual_judge_default", alias="npcId")
@@ -55,6 +66,7 @@ class NpcDecisionContext(CamelModel):
     room_config: NpcRoomConfig = Field(alias="roomConfig")
     source_event_id: str | None = Field(default=None, alias="sourceEventId")
     trigger_message: DebateMessageSnapshot | None = Field(default=None, alias="triggerMessage")
+    public_call: NpcPublicCallSnapshot | None = Field(default=None, alias="publicCall")
     recent_messages: list[DebateMessageSnapshot] = Field(default_factory=list, alias="recentMessages")
     now: str = Field(default_factory=utc_now_iso)
 
@@ -109,6 +121,21 @@ class DebateMessageCreatedTrigger(CamelModel):
     source_event_id: str | None = Field(default=None, alias="sourceEventId")
 
 
+class DebateNpcPublicCallCreatedTrigger(CamelModel):
+    event: Literal["DebateNpcPublicCallCreated"] = "DebateNpcPublicCallCreated"
+    session_id: int = Field(alias="sessionId")
+    public_call_id: int = Field(alias="publicCallId")
+    user_id: int = Field(alias="userId")
+    npc_id: str = Field(alias="npcId")
+    call_type: str = Field(alias="callType")
+    content: str
+    created_at: str = Field(alias="createdAt")
+    source_event_id: str | None = Field(default=None, alias="sourceEventId")
+
+
+NpcEventTrigger = DebateMessageCreatedTrigger | DebateNpcPublicCallCreatedTrigger
+
+
 class NpcEventProcessingRun(CamelModel):
     status: Literal[
         "submitted",
@@ -117,7 +144,7 @@ class NpcEventProcessingRun(CamelModel):
         "decision_rejected",
         "submit_failed",
     ]
-    trigger: DebateMessageCreatedTrigger
+    trigger: NpcEventTrigger
     decision_run: NpcDecisionRun = Field(alias="decisionRun")
     submit_result: SubmitActionCandidateOutput | None = Field(default=None, alias="submitResult")
     submit_attempts: int = Field(default=0, alias="submitAttempts")

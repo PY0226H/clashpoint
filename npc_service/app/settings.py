@@ -78,7 +78,10 @@ def load_settings() -> Settings:
         topic_prefix=os.getenv("NPC_KAFKA_TOPIC_PREFIX", "echoisle"),
         consume_topics=parse_env_csv(
             os.getenv("NPC_KAFKA_CONSUME_TOPICS"),
-            default=("debate.message.created.v1",),
+            default=(
+                "debate.message.created.v1",
+                "debate.npc.public_call.created.v1",
+            ),
         ),
         group_id=os.getenv("NPC_KAFKA_GROUP_ID", "npc-service"),
         client_id=os.getenv("NPC_KAFKA_CLIENT_ID", "npc-service"),

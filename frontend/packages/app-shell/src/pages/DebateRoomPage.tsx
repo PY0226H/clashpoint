@@ -10,6 +10,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@echoisle/auth-sdk";
 import { getRuntimeConfig } from "@echoisle/config";
 import {
+  createDebateNpcPublicCall,
   createDebateMessage,
   getDebateDrawVoteStatus,
   getDebateJudgeChallenge,
@@ -18,6 +19,7 @@ import {
   getOldestDebateMessageId,
   getWalletBalance,
   isDebateNpcActionCreatedPayload,
+  listDebateNpcActions,
   listDebateMessages,
   listDebatePinnedMessages,
   mergeDebateMessages,
@@ -26,8 +28,11 @@ import {
   requestDebateJudgeJob,
   resolveDebateJudgeChallengeView,
   resolveDebateJudgePublicVerificationView,
+  submitDebateNpcActionFeedback,
   submitDebateDrawVote,
   toDebateDomainError,
+  type DebateNpcFeedbackType,
+  type DebateNpcPublicCallType,
   type DebateMessage,
 } from "@echoisle/debate-domain";
 import {
@@ -130,6 +135,12 @@ export function DebateRoomPage() {
     enabled: Number.isFinite(sessionIdNum) && sessionIdNum > 0,
   });
 
+  const npcActionsQuery = useQuery({
+    queryKey: ["debate-room-npc-actions", sessionIdNum],
+    queryFn: () => listDebateNpcActions(sessionIdNum, { limit: 10 }),
+    enabled: Number.isFinite(sessionIdNum) && sessionIdNum > 0,
+  });
+
   const walletQuery = useQuery({
     queryKey: ["wallet-balance"],
     queryFn: () => getWalletBalance(),
@@ -150,7 +161,8 @@ export function DebateRoomPage() {
 
   const judgeChallengeQuery = useQuery({
     queryKey: ["debate-room-judge-challenge", sessionIdNum],
-    queryFn: () => getDebateJudgeChallenge(sessionIdNum, { dispatchType: "final" }),
+    queryFn: () =>
+      getDebateJudgeChallenge(sessionIdNum, { dispatchType: "final" }),
     enabled: Number.isFinite(sessionIdNum) && sessionIdNum > 0,
   });
 
@@ -170,6 +182,35 @@ export function DebateRoomPage() {
       void queryClient.invalidateQueries({
         queryKey: ["debate-room-messages", sessionIdNum],
       });
+    },
+    onError: (error) => {
+      setPageHint(toDebateDomainError(error));
+    },
+  });
+
+  const npcPublicCallMutation = useMutation({
+    mutationFn: async (input: {
+      callType: DebateNpcPublicCallType;
+      content: string;
+    }) => createDebateNpcPublicCall(sessionIdNum, input),
+    onSuccess: (result) => {
+      setPageHint(`NPC call queued: ${result.status}.`);
+    },
+    onError: (error) => {
+      setPageHint(toDebateDomainError(error));
+    },
+  });
+
+  const npcFeedbackMutation = useMutation({
+    mutationFn: async (input: {
+      actionId: number;
+      feedbackType: DebateNpcFeedbackType;
+    }) =>
+      submitDebateNpcActionFeedback(sessionIdNum, input.actionId, {
+        feedbackType: input.feedbackType,
+      }),
+    onSuccess: (result) => {
+      setPageHint(`NPC feedback recorded: ${result.feedbackType}.`);
     },
     onError: (error) => {
       setPageHint(toDebateDomainError(error));
@@ -292,6 +333,13 @@ export function DebateRoomPage() {
   }, [messagesQuery.data]);
 
   useEffect(() => {
+    if (!npcActionsQuery.data) {
+      return;
+    }
+    dispatchNpcState({ type: "history", payload: npcActionsQuery.data.items });
+  }, [npcActionsQuery.data]);
+
+  useEffect(() => {
     setMessages([]);
     setHasMoreHistory(true);
     setPageHint(null);
@@ -354,6 +402,9 @@ export function DebateRoomPage() {
       const event = String(payload.event || "");
       if (isDebateNpcActionCreatedPayload(payload)) {
         dispatchNpcState({ type: "roomAction", payload });
+        void queryClient.invalidateQueries({
+          queryKey: ["debate-room-npc-actions", sessionIdNum],
+        });
         return;
       }
       if (event === "DebateMessageCreated") {
@@ -366,6 +417,9 @@ export function DebateRoomPage() {
       if (event === "DebateMessagePinned") {
         void queryClient.invalidateQueries({
           queryKey: ["debate-room-pins", sessionIdNum],
+        });
+        void queryClient.invalidateQueries({
+          queryKey: ["debate-room-npc-actions", sessionIdNum],
         });
         void queryClient.invalidateQueries({ queryKey: ["wallet-balance"] });
         return;
@@ -445,6 +499,9 @@ export function DebateRoomPage() {
           void queryClient.invalidateQueries({
             queryKey: ["debate-room-pins", sessionIdNum],
           });
+          void queryClient.invalidateQueries({
+            queryKey: ["debate-room-npc-actions", sessionIdNum],
+          });
           void queryClient.invalidateQueries({ queryKey: ["wallet-balance"] });
           void queryClient.invalidateQueries({
             queryKey: ["debate-room-judge-report", sessionIdNum],
@@ -476,6 +533,9 @@ export function DebateRoomPage() {
             });
             void queryClient.invalidateQueries({
               queryKey: ["debate-room-pins", sessionIdNum],
+            });
+            void queryClient.invalidateQueries({
+              queryKey: ["debate-room-npc-actions", sessionIdNum],
             });
             void queryClient.invalidateQueries({
               queryKey: ["debate-room-judge-report", sessionIdNum],
@@ -596,6 +656,7 @@ export function DebateRoomPage() {
   const canSendMessage =
     messagesQuery.data?.canSendMessage ?? viewerRole === "participant";
   const participantActionDisabled = isSpectator;
+  const canUseNpcPublicCall = !isSpectator && Boolean(canSendMessage);
 
   if (!Number.isFinite(sessionIdNum) || sessionIdNum <= 0) {
     return (
@@ -646,7 +707,20 @@ export function DebateRoomPage() {
         </article>
       </section>
 
-      <DebateNpcPanel state={npcState} />
+      <DebateNpcPanel
+        canPublicCall={canUseNpcPublicCall}
+        feedbackPendingActionId={
+          npcFeedbackMutation.isPending
+            ? (npcFeedbackMutation.variables?.actionId ?? null)
+            : null
+        }
+        onFeedback={(actionId, feedbackType) =>
+          npcFeedbackMutation.mutate({ actionId, feedbackType })
+        }
+        onPublicCall={(input) => npcPublicCallMutation.mutate(input)}
+        publicCallPending={npcPublicCallMutation.isPending}
+        state={npcState}
+      />
 
       <section className="echo-lobby-panel">
         <h3>Pinned Messages</h3>
@@ -674,7 +748,9 @@ export function DebateRoomPage() {
         <h3>Judge & Draw</h3>
         <div className="echo-lobby-actions">
           <Button
-            disabled={requestJudgeMutation.isPending || participantActionDisabled}
+            disabled={
+              requestJudgeMutation.isPending || participantActionDisabled
+            }
             onClick={() => requestJudgeMutation.mutate()}
             type="button"
           >

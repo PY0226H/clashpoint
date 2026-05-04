@@ -27,11 +27,13 @@ pub const TOPIC_DEBATE_SESSION_STATUS_CHANGED: &str = "debate.session.status.cha
 pub const TOPIC_DEBATE_MESSAGE_CREATED: &str = "debate.message.created.v1";
 pub const TOPIC_DEBATE_MESSAGE_PINNED: &str = "debate.message.pinned.v1";
 pub const TOPIC_DEBATE_NPC_ACTION_CREATED: &str = "debate.npc.action.created.v1";
+pub const TOPIC_DEBATE_NPC_PUBLIC_CALL_CREATED: &str = "debate.npc.public_call.created.v1";
 pub const EVENT_TYPE_DEBATE_PARTICIPANT_JOINED: &str = "debate.participant.joined";
 pub const EVENT_TYPE_DEBATE_SESSION_STATUS_CHANGED: &str = "debate.session.status.changed";
 pub const EVENT_TYPE_DEBATE_MESSAGE_CREATED: &str = "debate.message.created";
 pub const EVENT_TYPE_DEBATE_MESSAGE_PINNED: &str = "debate.message.pinned";
 pub const EVENT_TYPE_DEBATE_NPC_ACTION_CREATED: &str = "debate.npc.action.created";
+pub const EVENT_TYPE_DEBATE_NPC_PUBLIC_CALL_CREATED: &str = "debate.npc.public_call.created";
 
 const OUTBOX_STATUS_PENDING: &str = "pending";
 const OUTBOX_STATUS_SENDING: &str = "sending";
@@ -47,6 +49,7 @@ pub enum DomainEvent {
     DebateMessageCreated(DebateMessageCreatedEvent),
     DebateMessagePinned(DebateMessagePinnedEvent),
     DebateNpcActionCreated(DebateNpcActionCreatedEvent),
+    DebateNpcPublicCallCreated(DebateNpcPublicCallCreatedEvent),
 }
 
 impl DomainEvent {
@@ -83,6 +86,13 @@ impl DomainEvent {
             Self::DebateNpcActionCreated(event) => build_outbox_message(
                 TOPIC_DEBATE_NPC_ACTION_CREATED,
                 EVENT_TYPE_DEBATE_NPC_ACTION_CREATED,
+                format!("session:{}", event.session_id),
+                event.created_at,
+                serde_json::to_value(event)?,
+            ),
+            Self::DebateNpcPublicCallCreated(event) => build_outbox_message(
+                TOPIC_DEBATE_NPC_PUBLIC_CALL_CREATED,
+                EVENT_TYPE_DEBATE_NPC_PUBLIC_CALL_CREATED,
                 format!("session:{}", event.session_id),
                 event.created_at,
                 serde_json::to_value(event)?,
@@ -614,6 +624,18 @@ pub struct DebateNpcActionCreatedEvent {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DebateNpcPublicCallCreatedEvent {
+    pub public_call_id: u64,
+    pub session_id: u64,
+    pub user_id: u64,
+    pub npc_id: String,
+    pub call_type: String,
+    pub content: String,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Clone)]
 pub(crate) struct KafkaEventBus {
     producer: FutureProducer,
@@ -754,6 +776,7 @@ impl EventBus {
                 bus.config.topic_name(TOPIC_DEBATE_SESSION_STATUS_CHANGED),
                 bus.config.topic_name(TOPIC_DEBATE_MESSAGE_CREATED),
                 bus.config.topic_name(TOPIC_DEBATE_MESSAGE_PINNED),
+                bus.config.topic_name(TOPIC_DEBATE_NPC_PUBLIC_CALL_CREATED),
             ]
         } else {
             bus.config
@@ -948,6 +971,7 @@ enum WorkerEvent {
     DebateSessionStatusChanged(DebateSessionStatusChangedEvent),
     DebateMessageCreated(DebateMessageCreatedEvent),
     DebateMessagePinned(DebateMessagePinnedEvent),
+    DebateNpcPublicCallCreated(DebateNpcPublicCallCreatedEvent),
 }
 
 pub(crate) fn worker_supported_event_types() -> &'static [&'static str] {
@@ -956,6 +980,7 @@ pub(crate) fn worker_supported_event_types() -> &'static [&'static str] {
         EVENT_TYPE_DEBATE_SESSION_STATUS_CHANGED,
         EVENT_TYPE_DEBATE_MESSAGE_CREATED,
         EVENT_TYPE_DEBATE_MESSAGE_PINNED,
+        EVENT_TYPE_DEBATE_NPC_PUBLIC_CALL_CREATED,
     ]
 }
 
@@ -1266,6 +1291,21 @@ async fn apply_worker_business_logic(
                     cost_coins: Some(v.cost_coins),
                     pin_seconds: Some(v.pin_seconds),
                     expires_at: Some(v.expires_at),
+                    ..WorkerEffectInput::default()
+                },
+            )
+            .await?;
+            Ok(BusinessProcessOutcome::Succeeded)
+        }
+        WorkerEvent::DebateNpcPublicCallCreated(v) => {
+            apply_npc_public_call_created_effect(tx, &v).await?;
+            record_worker_effect(
+                tx,
+                meta,
+                envelope,
+                WorkerEffectInput {
+                    session_id: to_i64(v.session_id, "session_id")?,
+                    user_id: Some(to_i64(v.user_id, "user_id")?),
                     ..WorkerEffectInput::default()
                 },
             )
@@ -1645,6 +1685,44 @@ async fn apply_message_pinned_effect(
     Ok(())
 }
 
+async fn apply_npc_public_call_created_effect(
+    tx: &mut Transaction<'_, Postgres>,
+    event: &DebateNpcPublicCallCreatedEvent,
+) -> anyhow::Result<()> {
+    let public_call_id = to_i64(event.public_call_id, "public_call_id")?;
+    let session_id = to_i64(event.session_id, "session_id")?;
+    let user_id = to_i64(event.user_id, "user_id")?;
+    let row: Option<(i64, i64, String, String, String)> = sqlx::query_as(
+        r#"
+        SELECT session_id, user_id, npc_id, call_type, content
+        FROM debate_npc_public_calls
+        WHERE id = $1
+        "#,
+    )
+    .bind(public_call_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some((row_session_id, row_user_id, row_npc_id, row_call_type, row_content)) = row else {
+        return Err(anyhow::anyhow!(
+            "npc public call event references missing public_call_id={}",
+            public_call_id
+        ));
+    };
+    ensure!(
+        row_session_id == session_id && row_user_id == user_id,
+        "npc public call identity mismatch, public_call_id={}",
+        public_call_id
+    );
+    ensure!(
+        row_npc_id == event.npc_id
+            && row_call_type == event.call_type
+            && row_content == event.content,
+        "npc public call payload mismatch, public_call_id={}",
+        public_call_id
+    );
+    Ok(())
+}
+
 async fn record_worker_effect(
     tx: &mut Transaction<'_, Postgres>,
     meta: &WorkerEnvelopeMeta,
@@ -1731,6 +1809,9 @@ fn decode_worker_event(envelope: &EventEnvelope) -> anyhow::Result<WorkerEvent> 
             serde_json::from_value(envelope.payload.clone())?,
         )),
         EVENT_TYPE_DEBATE_MESSAGE_PINNED => Ok(WorkerEvent::DebateMessagePinned(
+            serde_json::from_value(envelope.payload.clone())?,
+        )),
+        EVENT_TYPE_DEBATE_NPC_PUBLIC_CALL_CREATED => Ok(WorkerEvent::DebateNpcPublicCallCreated(
             serde_json::from_value(envelope.payload.clone())?,
         )),
         _ => Err(anyhow::anyhow!(
@@ -2331,6 +2412,64 @@ mod tests {
         assert_eq!(row.1, Some(message_id.0));
         assert_eq!(row.2, Some(pin_id.0));
         assert_eq!(row.3, Some(ledger_id.0));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn process_worker_envelope_should_validate_and_record_npc_public_call_effect(
+    ) -> Result<()> {
+        let (_tdb, state) = crate::AppState::new_for_test().await?;
+        let session_id = seed_topic_and_session(&state, "running").await?;
+        insert_participant(&state, session_id, 1, "pro").await?;
+        let public_call_id: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO debate_npc_public_calls(session_id, user_id, npc_id, call_type, content)
+            VALUES ($1, $2, 'virtual_judge_default', 'issue_summary', '帮忙概括一下当前争议焦点。')
+            RETURNING id
+            "#,
+        )
+        .bind(session_id)
+        .bind(1_i64)
+        .fetch_one(&state.pool)
+        .await?;
+
+        let envelope = EventEnvelope::new(
+            EVENT_TYPE_DEBATE_NPC_PUBLIC_CALL_CREATED,
+            "chat-server",
+            format!("session:{session_id}"),
+            serde_json::to_value(DebateNpcPublicCallCreatedEvent {
+                public_call_id: public_call_id.0 as u64,
+                session_id: session_id as u64,
+                user_id: 1,
+                npc_id: "virtual_judge_default".to_string(),
+                call_type: "issue_summary".to_string(),
+                content: "帮忙概括一下当前争议焦点。".to_string(),
+                created_at: Utc::now(),
+            })?,
+        );
+        let meta = WorkerEnvelopeMeta {
+            consumer_group: "worker-test-group".to_string(),
+            topic: TOPIC_DEBATE_NPC_PUBLIC_CALL_CREATED.to_string(),
+            partition: 1,
+            offset: 10,
+        };
+        let outcome = process_worker_envelope(&state.pool, &meta, &envelope).await?;
+        assert!(matches!(outcome, WorkerProcessOutcome::Succeeded));
+
+        let row: (Option<i64>, Option<i64>) = sqlx::query_as(
+            r#"
+            SELECT session_id, user_id
+            FROM kafka_consume_worker_effects
+            WHERE consumer_group = $1
+              AND event_id = $2
+            "#,
+        )
+        .bind(&meta.consumer_group)
+        .bind(&envelope.event_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(row.0, Some(session_id));
+        assert_eq!(row.1, Some(1));
         Ok(())
     }
 }

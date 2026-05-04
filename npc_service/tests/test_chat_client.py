@@ -7,7 +7,7 @@ import httpx
 from app.chat_client import NpcChatClient
 from app.guard import candidate_from_raw_output
 
-from helpers import make_context, make_settings
+from helpers import make_context, make_public_call, make_settings
 
 
 def test_chat_client_fetches_public_decision_context() -> None:
@@ -40,6 +40,44 @@ def test_chat_client_fetches_public_decision_context() -> None:
         assert context.session_id == 77
         assert context.trigger_message is not None
         assert context.trigger_message.message_id == 1001
+
+    asyncio.run(scenario())
+
+
+def test_chat_client_fetches_public_call_context() -> None:
+    async def scenario() -> None:
+        observed: dict[str, object] = {}
+        public_call = make_public_call()
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            observed["url"] = str(request.url)
+            return httpx.Response(
+                200,
+                json=make_context(
+                    trigger_message=None,
+                    public_call=public_call,
+                ).model_dump(by_alias=True),
+            )
+
+        settings = make_settings()
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            context = await NpcChatClient(
+                settings=settings,
+                client=client,
+            ).fetch_decision_context(
+                session_id=77,
+                public_call_id=3001,
+                source_event_id="evt-call-1",
+            )
+
+        assert (
+            observed["url"]
+            == "http://chat.test/api/internal/ai/debate/npc/sessions/77/context?publicCallId=3001&sourceEventId=evt-call-1"
+        )
+        assert context.trigger_message is None
+        assert context.public_call is not None
+        assert context.public_call.public_call_id == 3001
 
     asyncio.run(scenario())
 

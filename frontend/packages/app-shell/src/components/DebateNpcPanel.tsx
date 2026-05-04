@@ -1,3 +1,8 @@
+import { useState, type FormEvent } from "react";
+import type {
+  DebateNpcFeedbackType,
+  DebateNpcPublicCallType,
+} from "@echoisle/debate-domain";
 import type {
   DebateNpcFeedItem,
   DebateNpcState,
@@ -6,6 +11,14 @@ import type {
 
 type DebateNpcPanelProps = {
   state: DebateNpcState;
+  canPublicCall?: boolean;
+  publicCallPending?: boolean;
+  feedbackPendingActionId?: number | null;
+  onPublicCall?: (input: {
+    callType: DebateNpcPublicCallType;
+    content: string;
+  }) => void;
+  onFeedback?: (actionId: number, feedbackType: DebateNpcFeedbackType) => void;
 };
 
 type DebateNpcVisualProps = {
@@ -16,6 +29,8 @@ type DebateNpcVisualProps = {
 
 type DebateNpcActionFeedProps = {
   items: DebateNpcFeedItem[];
+  feedbackPendingActionId?: number | null;
+  onFeedback?: (actionId: number, feedbackType: DebateNpcFeedbackType) => void;
 };
 
 const STATUS_LABEL: Record<DebateNpcStatus, string> = {
@@ -23,6 +38,7 @@ const STATUS_LABEL: Record<DebateNpcStatus, string> = {
   speaking: "Speaking",
   praising: "Praising",
   silent: "Silent",
+  manual_takeover: "Manual",
   unavailable: "Unavailable",
 };
 
@@ -32,6 +48,27 @@ const ACTION_HEADLINE: Record<DebateNpcFeedItem["actionType"], string> = {
   effect: "Room effect",
   state_changed: "State update",
 };
+
+const PUBLIC_CALL_OPTIONS: Array<{
+  value: DebateNpcPublicCallType;
+  label: string;
+}> = [
+  { value: "issue_summary", label: "Summarize" },
+  { value: "rules_help", label: "Rules" },
+  { value: "pause_review", label: "Pause" },
+  { value: "report_issue", label: "Report" },
+  { value: "atmosphere_effect", label: "Effect" },
+];
+
+const FEEDBACK_OPTIONS: Array<{
+  value: DebateNpcFeedbackType;
+  label: string;
+}> = [
+  { value: "helpful", label: "Helpful" },
+  { value: "too_disruptive", label: "Too much" },
+  { value: "not_neutral", label: "Bias?" },
+  { value: "confusing", label: "Confusing" },
+];
 
 function formatNpcActionTime(value: string): string {
   const date = new Date(value);
@@ -65,7 +102,11 @@ function DebateNpcVisual({
   );
 }
 
-function DebateNpcActionFeed({ items }: DebateNpcActionFeedProps) {
+function DebateNpcActionFeed({
+  feedbackPendingActionId,
+  items,
+  onFeedback,
+}: DebateNpcActionFeedProps) {
   if (items.length === 0) {
     return (
       <div className="echo-npc-feed-empty">
@@ -78,20 +119,54 @@ function DebateNpcActionFeed({ items }: DebateNpcActionFeedProps) {
     <ol className="echo-npc-feed">
       {items.map((item) => (
         <li className="echo-npc-feed-item" key={item.actionUid}>
-          <div>
+          <div className="echo-npc-feed-head">
             <strong>{ACTION_HEADLINE[item.actionType]}</strong>
             <span>{formatNpcActionTime(item.createdAt)}</span>
           </div>
           <p>{item.text}</p>
           <small>{item.targetLabel}</small>
+          {onFeedback ? (
+            <div className="echo-npc-feedback">
+              {FEEDBACK_OPTIONS.map((option) => (
+                <button
+                  disabled={feedbackPendingActionId === item.actionId}
+                  key={option.value}
+                  onClick={() => onFeedback(item.actionId, option.value)}
+                  type="button"
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
         </li>
       ))}
     </ol>
   );
 }
 
-export function DebateNpcPanel({ state }: DebateNpcPanelProps) {
+export function DebateNpcPanel({
+  canPublicCall = false,
+  feedbackPendingActionId = null,
+  onFeedback,
+  onPublicCall,
+  publicCallPending = false,
+  state,
+}: DebateNpcPanelProps) {
   const latest = state.latestAction;
+  const [callType, setCallType] =
+    useState<DebateNpcPublicCallType>("issue_summary");
+  const [content, setContent] = useState("");
+  const normalizedContent = content.trim();
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!normalizedContent || !canPublicCall || !onPublicCall) {
+      return;
+    }
+    onPublicCall({ callType, content: normalizedContent });
+    setContent("");
+  }
 
   return (
     <section className={`echo-npc-panel is-${state.status}`} aria-live="polite">
@@ -122,7 +197,44 @@ export function DebateNpcPanel({ state }: DebateNpcPanelProps) {
         </div>
       </div>
 
-      <DebateNpcActionFeed items={state.feed} />
+      <form className="echo-npc-call" onSubmit={handleSubmit}>
+        <select
+          disabled={!canPublicCall || publicCallPending}
+          onChange={(event) =>
+            setCallType(event.target.value as DebateNpcPublicCallType)
+          }
+          value={callType}
+        >
+          {PUBLIC_CALL_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <input
+          disabled={!canPublicCall || publicCallPending}
+          maxLength={500}
+          onChange={(event) => setContent(event.target.value)}
+          placeholder={
+            canPublicCall
+              ? "Call the NPC in public..."
+              : "Public calls are unavailable"
+          }
+          value={content}
+        />
+        <button
+          disabled={!canPublicCall || !normalizedContent || publicCallPending}
+          type="submit"
+        >
+          {publicCallPending ? "Calling..." : "Call"}
+        </button>
+      </form>
+
+      <DebateNpcActionFeed
+        feedbackPendingActionId={feedbackPendingActionId}
+        items={state.feed}
+        onFeedback={onFeedback}
+      />
     </section>
   );
 }

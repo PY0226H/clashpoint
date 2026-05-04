@@ -1,5 +1,6 @@
 import type {
   DebateNpcActionCreatedPayload,
+  DebateNpcActionPublicItem,
   DebateNpcActionType,
 } from "@echoisle/debate-domain";
 
@@ -8,6 +9,7 @@ export type DebateNpcStatus =
   | "speaking"
   | "praising"
   | "silent"
+  | "manual_takeover"
   | "unavailable";
 
 export type DebateNpcFeedItem = {
@@ -34,6 +36,7 @@ export type DebateNpcState = {
 
 export type DebateNpcReducerAction =
   | { type: "reset" }
+  | { type: "history"; payload: DebateNpcActionPublicItem[] }
   | { type: "roomAction"; payload: DebateNpcActionCreatedPayload };
 
 const MAX_NPC_FEED_ITEMS = 6;
@@ -63,6 +66,8 @@ function normalizeNpcStatus(
       return "praising";
     case "silent":
       return "silent";
+    case "manual_takeover":
+      return "manual_takeover";
     case "unavailable":
       return "unavailable";
     default:
@@ -70,8 +75,12 @@ function normalizeNpcStatus(
   }
 }
 
+type DebateNpcVisibleAction =
+  | DebateNpcActionCreatedPayload
+  | DebateNpcActionPublicItem;
+
 export function resolveDebateNpcStatus(
-  action: DebateNpcActionCreatedPayload,
+  action: DebateNpcVisibleAction,
 ): DebateNpcStatus {
   const explicitStatus = normalizeNpcStatus(action.npcStatus);
   if (explicitStatus) {
@@ -92,7 +101,7 @@ export function resolveDebateNpcStatus(
   }
 }
 
-function resolveDebateNpcText(action: DebateNpcActionCreatedPayload): string {
+function resolveDebateNpcText(action: DebateNpcVisibleAction): string {
   const text = action.publicText?.trim();
   if (text) {
     return text;
@@ -113,7 +122,7 @@ function resolveDebateNpcText(action: DebateNpcActionCreatedPayload): string {
 }
 
 export function resolveDebateNpcTargetLabel(
-  action: DebateNpcActionCreatedPayload,
+  action: DebateNpcVisibleAction,
 ): string {
   const parts: string[] = [];
   if (action.targetMessageId != null) {
@@ -129,7 +138,7 @@ export function resolveDebateNpcTargetLabel(
 }
 
 export function buildDebateNpcFeedItem(
-  action: DebateNpcActionCreatedPayload,
+  action: DebateNpcVisibleAction,
 ): DebateNpcFeedItem {
   return {
     actionId: action.actionId,
@@ -150,6 +159,21 @@ export function debateNpcReducer(
 ): DebateNpcState {
   if (action.type === "reset") {
     return createInitialDebateNpcState();
+  }
+
+  if (action.type === "history") {
+    const items = action.payload.map(buildDebateNpcFeedItem);
+    const feed = items.slice(0, MAX_NPC_FEED_ITEMS);
+    const latest = feed[0] || null;
+    return {
+      displayName: latest?.displayName || state.displayName,
+      status: latest?.status || state.status,
+      latestAction: latest,
+      feed,
+      latestEffectKind: latest?.effectKind || state.latestEffectKind,
+      effectNonce: state.effectNonce,
+      seenActionUids: items.map((item) => item.actionUid).slice(0, 80),
+    };
   }
 
   if (state.seenActionUids.includes(action.payload.actionUid)) {

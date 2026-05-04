@@ -128,7 +128,8 @@ export type JsonValue =
   | { [key: string]: JsonValue }
   | JsonValue[];
 
-export const DEBATE_NPC_ACTION_CREATED_EVENT = "DebateNpcActionCreated" as const;
+export const DEBATE_NPC_ACTION_CREATED_EVENT =
+  "DebateNpcActionCreated" as const;
 
 export type DebateNpcActionType =
   | "speak"
@@ -152,6 +153,76 @@ export type DebateNpcActionCreatedPayload = {
   npcStatus?: string | null;
   reasonCode?: string | null;
   createdAt: string;
+};
+
+export type DebateNpcActionPublicItem = {
+  actionId: number;
+  actionUid: string;
+  sessionId: number;
+  npcId: string;
+  displayName: string;
+  actionType: DebateNpcActionType;
+  publicText?: string | null;
+  targetMessageId?: number | null;
+  targetUserId?: number | null;
+  targetSide?: DebateSide | null;
+  effectKind?: string | null;
+  npcStatus?: string | null;
+  reasonCode?: string | null;
+  createdAt: string;
+};
+
+export type ListDebateNpcActionsOutput = {
+  items: DebateNpcActionPublicItem[];
+  hasMore: boolean;
+  nextCursor?: number | null;
+};
+
+export type DebateNpcPublicCallType =
+  | "rules_help"
+  | "issue_summary"
+  | "pause_review"
+  | "report_issue"
+  | "atmosphere_effect";
+
+export type CreateDebateNpcPublicCallInput = {
+  callType: DebateNpcPublicCallType;
+  content: string;
+};
+
+export type DebateNpcPublicCall = {
+  id: number;
+  sessionId: number;
+  userId: number;
+  npcId: string;
+  callType: DebateNpcPublicCallType;
+  content: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DebateNpcFeedbackType =
+  | "helpful"
+  | "too_disruptive"
+  | "not_neutral"
+  | "confusing"
+  | "other";
+
+export type SubmitDebateNpcActionFeedbackInput = {
+  feedbackType: DebateNpcFeedbackType;
+  comment?: string;
+};
+
+export type DebateNpcActionFeedback = {
+  id: number;
+  actionId: number;
+  sessionId: number;
+  userId: number;
+  feedbackType: DebateNpcFeedbackType;
+  comment?: string | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type JudgeAssistantAgentKind = "npc_coach" | "room_qa" | (string & {});
@@ -240,7 +311,12 @@ export type JudgeAssistantAdvisoryOutput = {
 };
 
 export type JudgeAssistantAdvisoryView = {
-  state: "ready" | "not_ready" | "proxy_error" | "contract_violation" | "unknown";
+  state:
+    | "ready"
+    | "not_ready"
+    | "proxy_error"
+    | "contract_violation"
+    | "unknown";
   agentKind: string;
   label: string;
   reasonCode: string;
@@ -599,7 +675,9 @@ function isOptionalNonNegativeNumberOrNull(value: unknown): boolean {
   return value == null || isNonNegativeFiniteNumber(value);
 }
 
-function isOptionalDebateSideOrNull(value: unknown): value is DebateSide | null | undefined {
+function isOptionalDebateSideOrNull(
+  value: unknown,
+): value is DebateSide | null | undefined {
   return value == null || value === "pro" || value === "con";
 }
 
@@ -636,7 +714,9 @@ export function isDebateNpcActionCreatedPayload(
 
   if (
     typeof payload.actionType !== "string" ||
-    !DEBATE_NPC_ALLOWED_ACTION_TYPES.has(payload.actionType as DebateNpcActionType)
+    !DEBATE_NPC_ALLOWED_ACTION_TYPES.has(
+      payload.actionType as DebateNpcActionType,
+    )
   ) {
     return false;
   }
@@ -926,9 +1006,7 @@ function isAssistantRoomContextSnapshot(
   );
 }
 
-function isAssistantStageSummary(
-  value: JsonValue | null | undefined,
-): boolean {
+function isAssistantStageSummary(value: JsonValue | null | undefined): boolean {
   if (!objectHasExactKeys(value, ASSISTANT_STAGE_SUMMARY_KEYS)) {
     return false;
   }
@@ -963,9 +1041,7 @@ export function assertJudgeAssistantAdvisoryOutput(
   if (!assistantBoundaryIsSafe(output.capabilityBoundary)) {
     throw new Error("assistant advisory capability boundary is invalid");
   }
-  if (
-    !isAssistantRoomContextSnapshot(output.sharedContext, output.sessionId)
-  ) {
+  if (!isAssistantRoomContextSnapshot(output.sharedContext, output.sessionId)) {
     throw new Error("assistant advisory room context snapshot is invalid");
   }
   const advisoryContext = asJsonObject(output.advisoryContext);
@@ -973,7 +1049,8 @@ export function assertJudgeAssistantAdvisoryOutput(
   const stageSummary = advisoryContext?.stageSummary;
   if (
     !isAssistantRoomContextSnapshot(roomContextSnapshot, output.sessionId) ||
-    stableJsonValue(roomContextSnapshot) !== stableJsonValue(output.sharedContext)
+    stableJsonValue(roomContextSnapshot) !==
+      stableJsonValue(output.sharedContext)
   ) {
     throw new Error("assistant advisory advisory context snapshot is invalid");
   }
@@ -988,7 +1065,9 @@ export function assertJudgeAssistantAdvisoryOutput(
     hasForbiddenAssistantField(output.sharedContext) ||
     hasForbiddenAssistantField(output.advisoryContext)
   ) {
-    throw new Error("assistant advisory output contains forbidden official fields");
+    throw new Error(
+      "assistant advisory output contains forbidden official fields",
+    );
   }
   return output;
 }
@@ -1126,8 +1205,9 @@ export function resolveJudgeAssistantAdvisoryView(
   const roomContextSnapshot = asJsonObject(output.sharedContext);
   const contextStage = jsonString(stageSummary?.stage) || "room_context_only";
   const reasonCode =
-    String(output.errorCode || output.statusReason || output.status || "unknown") ||
-    "unknown";
+    String(
+      output.errorCode || output.statusReason || output.status || "unknown",
+    ) || "unknown";
   const fallbackMessage =
     state === "not_ready"
       ? "辅助建议暂未启用，当前不会影响官方裁决。"
@@ -1144,7 +1224,9 @@ export function resolveJudgeAssistantAdvisoryView(
     reasonCode,
     advisoryOnly: output.advisoryOnly === true,
     accepted: Boolean(output.accepted) && state === "ready",
-    caseId: Number.isFinite(Number(output.caseId)) ? Number(output.caseId) : null,
+    caseId: Number.isFinite(Number(output.caseId))
+      ? Number(output.caseId)
+      : null,
     message: firstAssistantOutputText(output.output) || fallbackMessage,
     items: state === "ready" ? assistantOutputItems(output.output) : [],
     contextStage,
@@ -1425,6 +1507,22 @@ export async function listDebatePinnedMessages(
   return response.data;
 }
 
+export async function listDebateNpcActions(
+  sessionId: number,
+  input?: { lastId?: number; limit?: number },
+): Promise<ListDebateNpcActionsOutput> {
+  const response = await http.get<ListDebateNpcActionsOutput>(
+    `/debate/sessions/${sessionId}/npc/actions`,
+    {
+      params: {
+        lastId: input?.lastId,
+        limit: input?.limit ?? 10,
+      },
+    },
+  );
+  return response.data;
+}
+
 export async function createDebateMessage(
   sessionId: number,
   content: string,
@@ -1434,6 +1532,39 @@ export async function createDebateMessage(
     {
       content: String(content || "").trim(),
     },
+  );
+  return response.data;
+}
+
+export async function createDebateNpcPublicCall(
+  sessionId: number,
+  input: CreateDebateNpcPublicCallInput,
+): Promise<DebateNpcPublicCall> {
+  const response = await http.post<DebateNpcPublicCall>(
+    `/debate/sessions/${sessionId}/npc/public-calls`,
+    {
+      callType: input.callType,
+      content: String(input.content || "").trim(),
+    },
+  );
+  return response.data;
+}
+
+export async function submitDebateNpcActionFeedback(
+  sessionId: number,
+  actionId: number,
+  input: SubmitDebateNpcActionFeedbackInput,
+): Promise<DebateNpcActionFeedback> {
+  const body: SubmitDebateNpcActionFeedbackInput = {
+    feedbackType: input.feedbackType,
+  };
+  const comment = String(input.comment || "").trim();
+  if (comment) {
+    body.comment = comment;
+  }
+  const response = await http.post<DebateNpcActionFeedback>(
+    `/debate/sessions/${sessionId}/npc/actions/${actionId}/feedback`,
+    body,
   );
   return response.data;
 }

@@ -37,25 +37,52 @@ impl AppState {
         query: GetDebateNpcDecisionContextQuery,
     ) -> Result<GetDebateNpcDecisionContextOutput, AppError> {
         let session_id_i64 = safe_u64_to_i64(session_id, DEBATE_NPC_CONTEXT_INVALID_SESSION_ID)?;
-        let trigger_message_id_i64 = safe_u64_to_i64(
-            query.trigger_message_id,
-            DEBATE_NPC_CONTEXT_INVALID_MESSAGE_ID,
-        )?;
-        let limit = normalize_npc_context_limit(query.limit);
-        let trigger_message = load_npc_message_snapshot(&self.pool, trigger_message_id_i64).await?;
-        if trigger_message.session_id != session_id_i64 {
-            return Err(AppError::NotFound(format!(
-                "debate message id {}",
-                query.trigger_message_id
-            )));
+        if query.trigger_message_id.is_none() && query.public_call_id.is_none() {
+            return Err(AppError::ValidationError(
+                DEBATE_NPC_CONTEXT_TRIGGER_REQUIRED.to_string(),
+            ));
         }
-        let recent_messages = load_recent_npc_message_snapshots(
-            &self.pool,
-            session_id_i64,
-            trigger_message_id_i64,
-            limit,
-        )
-        .await?;
+        let limit = normalize_npc_context_limit(query.limit);
+        let trigger_message = if let Some(trigger_message_id) = query.trigger_message_id {
+            let trigger_message_id_i64 =
+                safe_u64_to_i64(trigger_message_id, DEBATE_NPC_CONTEXT_INVALID_MESSAGE_ID)?;
+            let trigger_message =
+                load_npc_message_snapshot(&self.pool, trigger_message_id_i64).await?;
+            if trigger_message.session_id != session_id_i64 {
+                return Err(AppError::NotFound(format!(
+                    "debate message id {}",
+                    trigger_message_id
+                )));
+            }
+            Some(trigger_message)
+        } else {
+            None
+        };
+        let public_call = if let Some(public_call_id) = query.public_call_id {
+            let public_call_id_i64 =
+                safe_u64_to_i64(public_call_id, DEBATE_NPC_CONTEXT_INVALID_MESSAGE_ID)?;
+            let public_call = load_npc_public_call_snapshot(&self.pool, public_call_id_i64).await?;
+            if public_call.session_id != session_id_i64 {
+                return Err(AppError::NotFound(format!(
+                    "debate npc public call id {}",
+                    public_call_id
+                )));
+            }
+            Some(public_call)
+        } else {
+            None
+        };
+        let recent_messages = if let Some(trigger_message) = &trigger_message {
+            load_recent_npc_message_snapshots(
+                &self.pool,
+                session_id_i64,
+                trigger_message.message_id,
+                limit,
+            )
+            .await?
+        } else {
+            load_latest_npc_message_snapshots(&self.pool, session_id_i64, limit).await?
+        };
         let room_config =
             load_npc_room_config_pool(&self.pool, session_id_i64, DEBATE_NPC_DEFAULT_ID)
                 .await?
@@ -66,6 +93,7 @@ impl AppState {
             room_config,
             source_event_id: query.source_event_id,
             trigger_message,
+            public_call,
             recent_messages,
             now: Utc::now(),
         })
@@ -194,6 +222,193 @@ impl AppState {
 
         tx.commit().await?;
         Ok(config)
+    }
+
+    pub async fn list_debate_npc_actions(
+        &self,
+        user: &User,
+        session_id: u64,
+        query: ListDebateNpcActions,
+    ) -> Result<ListDebateNpcActionsOutput, AppError> {
+        let session_id_i64 = safe_u64_to_i64(session_id, DEBATE_NPC_CONTEXT_INVALID_SESSION_ID)?;
+        let limit = normalize_npc_action_history_limit(query.limit);
+        let last_id = query
+            .last_id
+            .map(|id| safe_u64_to_i64(id, "debate_npc_action_invalid_last_id"))
+            .transpose()?;
+        let mut tx = self.pool.begin().await?;
+        ensure_debate_npc_session_readable(
+            &mut tx,
+            session_id_i64,
+            user,
+            DEBATE_NPC_ACTIONS_READ_FORBIDDEN,
+        )
+        .await?;
+        let fetch_limit = limit + 1;
+        let items = sqlx::query_as::<_, DebateNpcActionPublicItem>(
+            r#"
+            SELECT
+              id AS action_id,
+              action_uid,
+              session_id,
+              npc_id,
+              display_name,
+              action_type,
+              public_text,
+              target_message_id,
+              target_user_id,
+              target_side,
+              effect_kind,
+              npc_status,
+              reason_code,
+              created_at
+            FROM debate_npc_actions
+            WHERE session_id = $1
+              AND ($2::bigint IS NULL OR id < $2)
+            ORDER BY id DESC
+            LIMIT $3
+            "#,
+        )
+        .bind(session_id_i64)
+        .bind(last_id)
+        .bind(fetch_limit)
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+
+        let has_more = items.len() as i64 > limit;
+        let visible_items: Vec<DebateNpcActionPublicItem> =
+            items.into_iter().take(limit as usize).collect();
+        let next_cursor = if has_more {
+            visible_items.last().map(|item| item.action_id as u64)
+        } else {
+            None
+        };
+        Ok(ListDebateNpcActionsOutput {
+            items: visible_items,
+            has_more,
+            next_cursor,
+        })
+    }
+
+    pub async fn create_debate_npc_public_call(
+        &self,
+        user: &User,
+        session_id: u64,
+        input: CreateDebateNpcPublicCallInput,
+    ) -> Result<DebateNpcPublicCall, AppError> {
+        let session_id_i64 = safe_u64_to_i64(session_id, DEBATE_NPC_CONTEXT_INVALID_SESSION_ID)?;
+        let call_type = normalize_npc_public_call_type(input.call_type)?;
+        let content = normalize_required_text(
+            input.content,
+            500,
+            DEBATE_NPC_PUBLIC_CALL_TEXT_EMPTY,
+            DEBATE_NPC_PUBLIC_CALL_TEXT_TOO_LONG,
+        )?;
+        let mut tx = self.pool.begin().await?;
+        ensure_debate_npc_public_call_allowed(&mut tx, session_id_i64, user).await?;
+
+        let call = sqlx::query_as::<_, DebateNpcPublicCall>(
+            r#"
+            INSERT INTO debate_npc_public_calls(session_id, user_id, npc_id, call_type, content)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id, session_id, user_id, npc_id, call_type, content, status, created_at, updated_at
+            "#,
+        )
+        .bind(session_id_i64)
+        .bind(user.id)
+        .bind(DEBATE_NPC_DEFAULT_ID)
+        .bind(&call_type)
+        .bind(&content)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        self.event_bus
+            .enqueue_in_tx(
+                &mut tx,
+                DomainEvent::DebateNpcPublicCallCreated(DebateNpcPublicCallCreatedEvent {
+                    public_call_id: call.id as u64,
+                    session_id: call.session_id as u64,
+                    user_id: call.user_id as u64,
+                    npc_id: call.npc_id.clone(),
+                    call_type: call.call_type.clone(),
+                    content: call.content.clone(),
+                    created_at: call.created_at,
+                }),
+            )
+            .await
+            .map_err(|err| {
+                warn!(
+                    session_id = call.session_id,
+                    public_call_id = call.id,
+                    user_id = user.id,
+                    "debate npc public call outbox enqueue failed: {}",
+                    err
+                );
+                AppError::ServerError(DEBATE_NPC_PUBLIC_CALL_OUTBOX_ENQUEUE_FAILED.to_string())
+            })?;
+
+        tx.commit().await?;
+        Ok(call)
+    }
+
+    pub async fn submit_debate_npc_action_feedback(
+        &self,
+        user: &User,
+        session_id: u64,
+        action_id: u64,
+        input: SubmitDebateNpcActionFeedbackInput,
+    ) -> Result<DebateNpcActionFeedback, AppError> {
+        let session_id_i64 = safe_u64_to_i64(session_id, DEBATE_NPC_CONTEXT_INVALID_SESSION_ID)?;
+        let action_id_i64 = safe_u64_to_i64(action_id, "debate_npc_feedback_invalid_action_id")?;
+        let feedback_type = normalize_npc_feedback_type(input.feedback_type)?;
+        let comment =
+            normalize_npc_feedback_comment(input.comment, DEBATE_NPC_FEEDBACK_COMMENT_TOO_LONG)?;
+        let mut tx = self.pool.begin().await?;
+        ensure_debate_npc_session_readable(
+            &mut tx,
+            session_id_i64,
+            user,
+            DEBATE_NPC_ACTIONS_READ_FORBIDDEN,
+        )
+        .await?;
+        let action_session_id: Option<i64> =
+            sqlx::query_scalar("SELECT session_id FROM debate_npc_actions WHERE id = $1")
+                .bind(action_id_i64)
+                .fetch_optional(&mut *tx)
+                .await?;
+        let Some(action_session_id) = action_session_id else {
+            return Err(AppError::NotFound(format!(
+                "debate npc action id {action_id}"
+            )));
+        };
+        if action_session_id != session_id_i64 {
+            return Err(AppError::DebateConflict(
+                DEBATE_NPC_FEEDBACK_ACTION_MISMATCH.to_string(),
+            ));
+        }
+        let feedback = sqlx::query_as::<_, DebateNpcActionFeedback>(
+            r#"
+            INSERT INTO debate_npc_action_feedback(
+              action_id, session_id, user_id, feedback_type, comment
+            )
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (action_id, user_id) DO UPDATE
+            SET feedback_type = EXCLUDED.feedback_type,
+                comment = EXCLUDED.comment,
+                updated_at = NOW()
+            RETURNING id, action_id, session_id, user_id, feedback_type, comment, created_at, updated_at
+            "#,
+        )
+        .bind(action_id_i64)
+        .bind(session_id_i64)
+        .bind(user.id)
+        .bind(&feedback_type)
+        .bind(&comment)
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(feedback)
     }
 
     pub async fn submit_debate_npc_action_candidate(
@@ -454,9 +669,70 @@ async fn load_recent_npc_message_snapshots(
     Ok(rows)
 }
 
+async fn load_latest_npc_message_snapshots(
+    pool: &sqlx::PgPool,
+    session_id: i64,
+    limit: i64,
+) -> Result<Vec<DebateNpcMessageSnapshot>, AppError> {
+    let rows = sqlx::query_as::<_, DebateNpcMessageSnapshot>(
+        r#"
+        SELECT message_id, session_id, user_id, side, content, created_at
+        FROM (
+            SELECT
+              id AS message_id,
+              session_id,
+              user_id,
+              side,
+              content,
+              created_at
+            FROM session_messages
+            WHERE session_id = $1
+            ORDER BY id DESC
+            LIMIT $2
+        ) recent
+        ORDER BY message_id ASC
+        "#,
+    )
+    .bind(session_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+async fn load_npc_public_call_snapshot(
+    pool: &sqlx::PgPool,
+    public_call_id: i64,
+) -> Result<DebateNpcPublicCallSnapshot, AppError> {
+    let row = sqlx::query_as::<_, DebateNpcPublicCallSnapshot>(
+        r#"
+        SELECT
+          id AS public_call_id,
+          session_id,
+          user_id,
+          npc_id,
+          call_type,
+          content,
+          status,
+          created_at
+        FROM debate_npc_public_calls
+        WHERE id = $1
+        "#,
+    )
+    .bind(public_call_id)
+    .fetch_optional(pool)
+    .await?;
+    row.ok_or_else(|| AppError::NotFound(format!("debate npc public call id {public_call_id}")))
+}
+
 fn normalize_npc_context_limit(raw: Option<u64>) -> i64 {
     raw.unwrap_or(DEBATE_NPC_CONTEXT_DEFAULT_LIMIT)
         .clamp(1, DEBATE_NPC_CONTEXT_MAX_LIMIT) as i64
+}
+
+fn normalize_npc_action_history_limit(raw: Option<u64>) -> i64 {
+    raw.unwrap_or(DEBATE_NPC_ACTION_HISTORY_DEFAULT_LIMIT)
+        .clamp(1, DEBATE_NPC_ACTION_HISTORY_MAX_LIMIT) as i64
 }
 
 async fn load_npc_action_by_uid(
@@ -580,6 +856,93 @@ async fn ensure_debate_session_exists_tx(
         return Err(AppError::NotFound(format!(
             "debate session id {session_id}"
         )));
+    }
+    Ok(())
+}
+
+async fn load_debate_npc_session_for_action(
+    tx: &mut Transaction<'_, Postgres>,
+    session_id: i64,
+) -> Result<DebateSessionForAction, AppError> {
+    let row = sqlx::query_as::<_, DebateSessionForAction>(
+        r#"
+        SELECT status, end_at, NOW() AS db_now
+        FROM debate_sessions
+        WHERE id = $1
+        "#,
+    )
+    .bind(session_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    row.ok_or_else(|| AppError::NotFound(format!("debate session id {session_id}")))
+}
+
+async fn ensure_debate_npc_session_readable(
+    tx: &mut Transaction<'_, Postgres>,
+    session_id: i64,
+    user: &User,
+    forbidden_code: &str,
+) -> Result<(), AppError> {
+    let session = load_debate_npc_session_for_action(tx, session_id).await?;
+    let participant: Option<(String,)> = sqlx::query_as(
+        r#"
+        SELECT side
+        FROM session_participants
+        WHERE session_id = $1 AND user_id = $2
+        "#,
+    )
+    .bind(session_id)
+    .bind(user.id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    if participant.is_some() || can_spectate_status(&session.status) {
+        return Ok(());
+    }
+    Err(AppError::DebateConflict(forbidden_code.to_string()))
+}
+
+async fn ensure_debate_npc_public_call_allowed(
+    tx: &mut Transaction<'_, Postgres>,
+    session_id: i64,
+    user: &User,
+) -> Result<(), AppError> {
+    let session = load_debate_npc_session_for_action(tx, session_id).await?;
+    if !can_join_status(&session.status) || session.end_at <= session.db_now {
+        return Err(AppError::DebateConflict(
+            DEBATE_NPC_PUBLIC_CALL_SESSION_NOT_ACCEPTING.to_string(),
+        ));
+    }
+    let joined: bool = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS(
+          SELECT 1
+          FROM session_participants
+          WHERE session_id = $1 AND user_id = $2
+        )
+        "#,
+    )
+    .bind(session_id)
+    .bind(user.id)
+    .fetch_one(&mut **tx)
+    .await?;
+    if !joined {
+        return Err(AppError::DebateConflict(
+            DEBATE_NPC_PUBLIC_CALL_NOT_JOINED.to_string(),
+        ));
+    }
+    let Some(config) = load_npc_room_config(tx, session_id, DEBATE_NPC_DEFAULT_ID).await? else {
+        return Err(AppError::DebateConflict(
+            DEBATE_NPC_PUBLIC_CALL_DISABLED.to_string(),
+        ));
+    };
+    if !config.enabled
+        || config.status != DEBATE_NPC_STATUS_ACTIVE
+        || !config.allow_public_call
+        || !(config.allow_speak || config.allow_effect || config.allow_state_change)
+    {
+        return Err(AppError::DebateConflict(
+            DEBATE_NPC_PUBLIC_CALL_DISABLED.to_string(),
+        ));
     }
     Ok(())
 }
@@ -1017,6 +1380,45 @@ fn normalize_optional_text(
             DEBATE_NPC_ACTION_FIELD_TOO_LONG
         };
         return Err(AppError::ValidationError(code.to_string()));
+    }
+    Ok(Some(normalized))
+}
+
+fn normalize_npc_public_call_type(raw: String) -> Result<String, AppError> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "rules_help" | "issue_summary" | "pause_review" | "report_issue" | "atmosphere_effect" => {
+            Ok(normalized)
+        }
+        _ => Err(AppError::ValidationError(
+            DEBATE_NPC_PUBLIC_CALL_INVALID_TYPE.to_string(),
+        )),
+    }
+}
+
+fn normalize_npc_feedback_type(raw: String) -> Result<String, AppError> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "helpful" | "too_disruptive" | "not_neutral" | "confusing" | "other" => Ok(normalized),
+        _ => Err(AppError::ValidationError(
+            DEBATE_NPC_FEEDBACK_INVALID_TYPE.to_string(),
+        )),
+    }
+}
+
+fn normalize_npc_feedback_comment(
+    raw: Option<String>,
+    too_long_code: &str,
+) -> Result<Option<String>, AppError> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let normalized = raw.trim().to_string();
+    if normalized.is_empty() {
+        return Ok(None);
+    }
+    if normalized.chars().count() > 300 {
+        return Err(AppError::ValidationError(too_long_code.to_string()));
     }
     Ok(Some(normalized))
 }

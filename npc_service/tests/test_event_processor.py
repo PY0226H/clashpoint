@@ -10,7 +10,14 @@ from app.event_processor import NpcEventProcessor
 from app.guard import candidate_from_raw_output
 from app.models import NpcDecisionContext, NpcDecisionRun
 
-from helpers import make_context, make_room_config, make_settings, make_trigger
+from helpers import (
+    make_context,
+    make_public_call,
+    make_public_call_trigger,
+    make_room_config,
+    make_settings,
+    make_trigger,
+)
 
 
 class FakeRouter:
@@ -113,6 +120,100 @@ def test_event_processor_stays_silent_when_room_config_blocks_npc() -> None:
         assert run.status == "silent"
         assert run.decision_run.status == "silent"
         assert run.decision_run.guard_reason == "npc_status_manual_takeover"
+        assert run.submit_attempts == 0
+        assert post_count == 0
+        assert router.decision_count == 0
+
+    asyncio.run(scenario())
+
+
+def test_event_processor_handles_public_call_with_public_call_context() -> None:
+    async def scenario() -> None:
+        observed: dict[str, object] = {}
+        context = make_context(
+            trigger_message=None,
+            public_call=make_public_call(),
+            room_config=make_room_config(allow_public_call=True),
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET":
+                observed["context_url"] = str(request.url)
+                return httpx.Response(200, json=context.model_dump(by_alias=True))
+            observed["candidate_payload"] = json.loads(request.content.decode("utf-8"))
+            return httpx.Response(
+                200,
+                json={
+                    "accepted": True,
+                    "actionId": 902,
+                    "actionUid": observed["candidate_payload"]["actionUid"],
+                    "status": "created",
+                    "reasonCode": None,
+                },
+            )
+
+        settings = make_settings()
+        router = FakeRouter(
+            raw_action={
+                "actionType": "speak",
+                "publicText": "我来帮大家收束一下争议焦点。",
+                "npcStatus": "speaking",
+            }
+        )
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            processor = NpcEventProcessor(
+                settings=settings,
+                router=router,
+                chat_client=NpcChatClient(settings=settings, client=client),
+            )
+
+            run = await processor.handle_debate_npc_public_call_created(
+                make_public_call_trigger()
+            )
+
+        assert run.status == "submitted"
+        assert "publicCallId=3001" in str(observed["context_url"])
+        assert router.context is not None
+        assert router.context.public_call is not None
+        assert observed["candidate_payload"]["actionType"] == "speak"
+        assert "sourceMessageId" not in observed["candidate_payload"]
+
+    asyncio.run(scenario())
+
+
+def test_event_processor_stays_silent_when_public_call_gate_disabled() -> None:
+    async def scenario() -> None:
+        post_count = 0
+        context = make_context(
+            trigger_message=None,
+            public_call=make_public_call(),
+            room_config=make_room_config(allow_public_call=False),
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal post_count
+            if request.method == "GET":
+                return httpx.Response(200, json=context.model_dump(by_alias=True))
+            post_count += 1
+            return httpx.Response(500, json={"error": "should not submit"})
+
+        settings = make_settings()
+        router = FakeRouter()
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            processor = NpcEventProcessor(
+                settings=settings,
+                router=router,
+                chat_client=NpcChatClient(settings=settings, client=client),
+            )
+
+            run = await processor.handle_debate_npc_public_call_created(
+                make_public_call_trigger()
+            )
+
+        assert run.status == "silent"
+        assert run.decision_run.guard_reason == "npc_public_call_disabled"
         assert run.submit_attempts == 0
         assert post_count == 0
         assert router.decision_count == 0

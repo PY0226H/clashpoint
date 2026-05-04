@@ -1,7 +1,7 @@
 use crate::{
     AppError, AppState, DebateMessageCreatedEvent, DebateMessagePinnedEvent,
-    DebateNpcActionCreatedEvent, DebateParticipantJoinedEvent, DebateSessionStatusChangedEvent,
-    DomainEvent, EventPublisher,
+    DebateNpcActionCreatedEvent, DebateNpcPublicCallCreatedEvent, DebateParticipantJoinedEvent,
+    DebateSessionStatusChangedEvent, DomainEvent, EventPublisher,
 };
 use chat_core::User;
 use chrono::{DateTime, Utc};
@@ -120,6 +120,22 @@ const DEBATE_NPC_CONTEXT_DEFAULT_LIMIT: u64 = 20;
 const DEBATE_NPC_CONTEXT_MAX_LIMIT: u64 = 50;
 const DEBATE_NPC_CONTEXT_INVALID_SESSION_ID: &str = "debate_npc_context_invalid_session_id";
 const DEBATE_NPC_CONTEXT_INVALID_MESSAGE_ID: &str = "debate_npc_context_invalid_message_id";
+const DEBATE_NPC_CONTEXT_TRIGGER_REQUIRED: &str = "debate_npc_context_trigger_required";
+const DEBATE_NPC_ACTION_HISTORY_DEFAULT_LIMIT: u64 = 6;
+const DEBATE_NPC_ACTION_HISTORY_MAX_LIMIT: u64 = 20;
+const DEBATE_NPC_ACTIONS_READ_FORBIDDEN: &str = "debate_npc_actions_read_forbidden";
+const DEBATE_NPC_PUBLIC_CALL_INVALID_TYPE: &str = "debate_npc_public_call_type_invalid";
+const DEBATE_NPC_PUBLIC_CALL_TEXT_EMPTY: &str = "debate_npc_public_call_text_empty";
+const DEBATE_NPC_PUBLIC_CALL_TEXT_TOO_LONG: &str = "debate_npc_public_call_text_too_long";
+const DEBATE_NPC_PUBLIC_CALL_NOT_JOINED: &str = "debate_npc_public_call_not_joined";
+const DEBATE_NPC_PUBLIC_CALL_SESSION_NOT_ACCEPTING: &str =
+    "debate_npc_public_call_session_not_accepting";
+const DEBATE_NPC_PUBLIC_CALL_DISABLED: &str = "debate_npc_public_call_disabled";
+const DEBATE_NPC_PUBLIC_CALL_OUTBOX_ENQUEUE_FAILED: &str =
+    "debate_npc_public_call_outbox_enqueue_failed";
+const DEBATE_NPC_FEEDBACK_INVALID_TYPE: &str = "debate_npc_feedback_type_invalid";
+const DEBATE_NPC_FEEDBACK_COMMENT_TOO_LONG: &str = "debate_npc_feedback_comment_too_long";
+const DEBATE_NPC_FEEDBACK_ACTION_MISMATCH: &str = "debate_npc_feedback_action_mismatch";
 
 #[derive(Debug, Clone, FromRow, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -426,7 +442,8 @@ pub struct SubmitDebateNpcActionCandidateOutput {
 #[derive(Debug, Clone, IntoParams, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetDebateNpcDecisionContextQuery {
-    pub trigger_message_id: u64,
+    pub trigger_message_id: Option<u64>,
+    pub public_call_id: Option<u64>,
     pub source_event_id: Option<String>,
     pub limit: Option<u64>,
 }
@@ -442,6 +459,19 @@ pub struct DebateNpcMessageSnapshot {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, FromRow, ToSchema, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DebateNpcPublicCallSnapshot {
+    pub public_call_id: i64,
+    pub session_id: i64,
+    pub user_id: i64,
+    pub npc_id: String,
+    pub call_type: String,
+    pub content: String,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetDebateNpcDecisionContextOutput {
@@ -449,9 +479,85 @@ pub struct GetDebateNpcDecisionContextOutput {
     pub npc_id: String,
     pub room_config: DebateNpcRoomConfig,
     pub source_event_id: Option<String>,
-    pub trigger_message: DebateNpcMessageSnapshot,
+    pub trigger_message: Option<DebateNpcMessageSnapshot>,
+    pub public_call: Option<DebateNpcPublicCallSnapshot>,
     pub recent_messages: Vec<DebateNpcMessageSnapshot>,
     pub now: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DebateNpcActionPublicItem {
+    pub action_id: i64,
+    pub action_uid: String,
+    pub session_id: i64,
+    pub npc_id: String,
+    pub display_name: String,
+    pub action_type: String,
+    pub public_text: Option<String>,
+    pub target_message_id: Option<i64>,
+    pub target_user_id: Option<i64>,
+    pub target_side: Option<String>,
+    pub effect_kind: Option<String>,
+    pub npc_status: Option<String>,
+    pub reason_code: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, IntoParams, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListDebateNpcActions {
+    pub last_id: Option<u64>,
+    pub limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListDebateNpcActionsOutput {
+    pub items: Vec<DebateNpcActionPublicItem>,
+    pub has_more: bool,
+    pub next_cursor: Option<u64>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateDebateNpcPublicCallInput {
+    pub call_type: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, FromRow, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DebateNpcPublicCall {
+    pub id: i64,
+    pub session_id: i64,
+    pub user_id: i64,
+    pub npc_id: String,
+    pub call_type: String,
+    pub content: String,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitDebateNpcActionFeedbackInput {
+    pub feedback_type: String,
+    pub comment: Option<String>,
+}
+
+#[derive(Debug, Clone, FromRow, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DebateNpcActionFeedback {
+    pub id: i64,
+    pub action_id: i64,
+    pub session_id: i64,
+    pub user_id: i64,
+    pub feedback_type: String,
+    pub comment: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]

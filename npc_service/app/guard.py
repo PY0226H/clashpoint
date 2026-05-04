@@ -21,7 +21,14 @@ MAX_EFFECT_KIND_CHARS = 48
 MAX_REASON_CODE_CHARS = 80
 
 ALLOWED_ACTION_TYPES: set[str] = {"speak", "praise", "effect", "state_changed"}
-ALLOWED_NPC_STATUSES: set[str] = {"observing", "speaking", "praising", "silent", "unavailable"}
+ALLOWED_NPC_STATUSES: set[str] = {
+    "observing",
+    "speaking",
+    "praising",
+    "silent",
+    "manual_takeover",
+    "unavailable",
+}
 
 FORBIDDEN_OFFICIAL_FIELDS: set[str] = {
     "officialverdict",
