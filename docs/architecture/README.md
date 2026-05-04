@@ -78,7 +78,7 @@
 
 ### 3.2.1 虚拟裁判 NPC（公开房间娱乐角色）
 
-虚拟裁判 NPC 是房间内公开可见的娱乐导向角色，不是赛后官方 AI 裁判团，也不替代正式裁决报告。当前 P1-A / P1-B 已落地 chat 侧 action spine 与 notify replay 合同；前端展示壳与独立 `npc_service/` 仍按开发计划推进。
+虚拟裁判 NPC 是房间内公开可见的娱乐导向角色，不是赛后官方 AI 裁判团，也不替代正式裁决报告。当前 P1-A / P1-B / P1-C 已落地 chat 侧 action spine、notify replay 合同与 Debate Room 前端展示壳；独立 `npc_service/` 仍按开发计划推进。
 
 优先看：
 
@@ -89,8 +89,10 @@
 5. [notify ws.rs](/Users/panyihang/Documents/EchoIsle/chat/notify_server/src/ws.rs)
 6. [realtime-sdk index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/realtime-sdk/src/index.ts)
 7. [debate-domain index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/debate-domain/src/index.ts)
-8. [NPC action migration](/Users/panyihang/Documents/EchoIsle/chat/migrations/20260503090000_debate_npc_action_spine.sql)
-9. [虚拟裁判NPC_开发计划.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/虚拟裁判NPC_开发计划.md)
+8. [DebateNpcPanel.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/components/DebateNpcPanel.tsx)
+9. [DebateNpcModel.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/components/DebateNpcModel.ts)
+10. [NPC action migration](/Users/panyihang/Documents/EchoIsle/chat/migrations/20260503090000_debate_npc_action_spine.sql)
+11. [虚拟裁判NPC_开发计划.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/虚拟裁判NPC_开发计划.md)
 
 ### 3.3 AI 裁判 / 报告 / 申诉 / 平局投票
 

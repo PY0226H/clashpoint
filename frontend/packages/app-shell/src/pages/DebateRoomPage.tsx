@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@echoisle/auth-sdk";
 import { getRuntimeConfig } from "@echoisle/config";
@@ -10,6 +17,7 @@ import {
   getDebateJudgeReport,
   getOldestDebateMessageId,
   getWalletBalance,
+  isDebateNpcActionCreatedPayload,
   listDebateMessages,
   listDebatePinnedMessages,
   mergeDebateMessages,
@@ -33,6 +41,11 @@ import {
 import { Button, InlineHint, SectionTitle, TextField } from "@echoisle/ui";
 import { useNavigate, useParams } from "react-router-dom";
 import { DebateAssistantPanel } from "../components/DebateAssistantPanel";
+import { DebateNpcPanel } from "../components/DebateNpcPanel";
+import {
+  debateNpcReducer,
+  createInitialDebateNpcState,
+} from "../components/DebateNpcModel";
 
 const runtime = getRuntimeConfig();
 const HISTORY_LIMIT = 80;
@@ -89,6 +102,11 @@ export function DebateRoomPage() {
   const [wsStatus, setWsStatus] = useState<
     "disconnected" | "connecting" | "connected" | "reconnecting"
   >("disconnected");
+  const [npcState, dispatchNpcState] = useReducer(
+    debateNpcReducer,
+    undefined,
+    createInitialDebateNpcState,
+  );
   const wsRef = useRef<WebSocket | null>(null);
   const connectWsRef = useRef<() => void>(() => undefined);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -277,6 +295,7 @@ export function DebateRoomPage() {
     setMessages([]);
     setHasMoreHistory(true);
     setPageHint(null);
+    dispatchNpcState({ type: "reset" });
     lastAckSeqRef.current = 0;
   }, [sessionIdNum]);
 
@@ -333,6 +352,10 @@ export function DebateRoomPage() {
   const handleRoomPayload = useCallback(
     (payload: Record<string, unknown>) => {
       const event = String(payload.event || "");
+      if (isDebateNpcActionCreatedPayload(payload)) {
+        dispatchNpcState({ type: "roomAction", payload });
+        return;
+      }
       if (event === "DebateMessageCreated") {
         const roomMessage = toRoomMessage(payload);
         if (roomMessage) {
@@ -616,6 +639,8 @@ export function DebateRoomPage() {
           <span>Judge Status</span>
         </article>
       </section>
+
+      <DebateNpcPanel state={npcState} />
 
       <section className="echo-lobby-panel">
         <h3>Pinned Messages</h3>

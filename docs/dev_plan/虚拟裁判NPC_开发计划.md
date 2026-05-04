@@ -35,7 +35,7 @@
 
 | 领域 | 当前事实 | 计划影响 |
 | --- | --- | --- |
-| Debate Room 前端 | [DebateRoomPage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/DebateRoomPage.tsx) 是当前房间主入口，已有消息、置顶、Judge / Draw、WS 重连等逻辑 | 需要新增 NPC 展示壳、action feed、动效层和 reducer，避免继续撑大页面 |
+| Debate Room 前端 | [DebateRoomPage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/DebateRoomPage.tsx) 是当前房间主入口，已有消息、置顶、Judge / Draw、WS 重连等逻辑，P1-C 已新增 NPC 展示壳、action feed 与 reducer | P2-D/P2-E 后可由真实 `npc_service` action 驱动 |
 | 前端实时协议 | [realtime-sdk/src/index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/realtime-sdk/src/index.ts) 使用通用 `roomEvent` 承载 `eventName + payload` | 可新增 `DebateNpcActionCreated` payload 类型，不需要重做 WS 协议 |
 | notify WS | [ws.rs](/Users/panyihang/Documents/EchoIsle/chat/notify_server/src/ws.rs) 支持 `lastAckSeq`、replay、ack、syncRequired | NPC action 必须进入可 replay 房间事件，断线重连不能丢失或重复 |
 | notify event mapping | [notif.rs](/Users/panyihang/Documents/EchoIsle/chat/notify_server/src/notif.rs) 的 `AppEvent` 决定 debate event 识别、session id 与 dedupe key | 需要新增 `DebateNpcActionCreated` 映射和 dedupe 规则 |
@@ -50,7 +50,7 @@
 | P0-A. `virtual-judge-npc-planning-current-state` | 生成开发计划并切换 active 主线 | 已完成 | 本文档与 [当前开发计划.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md) 完成同步后即完成 |
 | P1-A. `virtual-judge-npc-chat-action-spine` | 建立 chat 侧 NPC action 数据模型、内部 API 与 guard | 已完成 | 已新增 action/config 表、内部 candidate 接收接口、guard、限频、幂等重放、outbox 事件与 targeted tests |
 | P1-B. `virtual-judge-npc-notify-replay-contract` | 打通 `DebateNpcActionCreated` outbox、notify WS、replay 和 dedupe | 已完成 | 已新增 notify Kafka topic / AppEvent 映射、稳定 dedupe key、前端 payload 类型与可见字段 guard |
-| P1-C. `virtual-judge-npc-frontend-shell` | 前端新增 NPC 动态展示壳、action feed 与轻量动效 | 待执行 | 先用 mock / fixture 事件驱动 UI，不等待 LLM |
+| P1-C. `virtual-judge-npc-frontend-shell` | 前端新增 NPC 动态展示壳、action feed 与轻量动效 | 已完成 | 已新增 `DebateNpcPanel`、`DebateNpcModel`、CSS 动效和 DebateRoomPage room event 接入 |
 | P2-D. `virtual-judge-npc-service-skeleton-executor-router` | 新增 `npc_service/`、LLM provider adapter、executor router、rule fallback | 待执行 | `llm_executor_v1` 为主路径，rule 只兜底 |
 | P2-E. `virtual-judge-npc-event-consumption-loop` | 消费 `DebateMessageCreated`，拉取 context，提交 candidate | 待执行 | 从用户发言到 NPC action 的服务间闭环 |
 | P3-F. `virtual-judge-npc-e2e-smoke-and-fallback-hardening` | 端到端 smoke、LLM fallback、限频、幂等、隔离验证 | 待执行 | 证明 NPC 不影响发言、置顶、Judge / Draw |
@@ -200,6 +200,15 @@
 1. app-shell / debate-domain targeted tests。
 2. Playwright 或现有 web smoke 截图检查。
 3. 桌面端如共用 app-shell，需要同步跑 desktop smoke 或说明未跑原因。
+
+完成记录：
+
+1. Debate Room 首屏已渲染虚拟裁判 NPC 面板，空状态显示 observing。
+2. `DebateNpcActionCreated` room event 已进入前端 reducer，支持 replay 去重。
+3. `praise / speak / effect / state_changed` action 已映射为状态、action feed、目标标签和轻量动效。
+4. 样式包含 reduced motion 降级，动效限制在 NPC 面板内，不覆盖消息和输入。
+5. 测试覆盖 praise 渲染、重复 action 忽略、无目标 action fallback，以及无私聊/无正式裁决语义。
+6. 已通过 app-shell lint/typecheck/test 与 `post-module-test-guard --mode full`。
 
 ### P2-D. `virtual-judge-npc-service-skeleton-executor-router`
 
@@ -366,3 +375,4 @@
 - 2026-05-03：基于已定档的虚拟裁判 NPC PRD、MVP 切片与系统设计，生成本开发计划；主线为独立 `npc_service` + LLM executor router + rule fallback。
 - 2026-05-03：完成 P1-A `virtual-judge-npc-chat-action-spine`；chat 侧已具备 NPC action/config 表、内部 candidate sink、二次 guard、限频、幂等重放与 `DebateNpcActionCreated` outbox 事件骨架；下一步执行 P1-B notify replay 合同。
 - 2026-05-03：完成 P1-B `virtual-judge-npc-notify-replay-contract`；`DebateNpcActionCreated` 已纳入 notify Kafka topic、AppEvent、room replay、ack/dedupe 合同，并同步 realtime-sdk / debate-domain payload 类型与可见字段 guard；下一步执行 P1-C 前端展示壳。
+- 2026-05-03：完成 P1-C `virtual-judge-npc-frontend-shell`；Debate Room 已展示虚拟裁判 NPC 面板，支持状态、action feed、赞赏目标、轻量动效和 replay 去重；下一步执行 P2-D 独立 `npc_service` 与 executor router。
