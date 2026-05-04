@@ -1,7 +1,7 @@
 # 虚拟裁判 NPC 下一阶段开发计划
 
 更新时间：2026-05-04
-文档状态：active，P1-C 已完成（env_blocked）
+文档状态：active，P2-G 已完成（env_blocked / no-go）
 当前主线：`virtual-judge-npc-beta-real-env-canary-dashboard-closure`
 
 关联 PRD：[虚拟裁判NPC完整PRD.md](/Users/panyihang/Documents/EchoIsle/docs/PRD/虚拟裁判NPC完整PRD.md)
@@ -88,15 +88,15 @@
 | P1-D. `virtual-judge-npc-single-session-llm-canary-run` | 在单个 Beta / staging 房间跑真实 LLM canary | 阻塞（env_blocked） | P1-C 未 ready，不执行真实 canary，避免把本地证据误写成真实环境 pass |
 | P1-E. `virtual-judge-npc-canary-dashboard-evidence-pack` | 固化 dashboard / 日志 / SQL / Kafka / DLQ 查询证据 | 阻塞（env_blocked） | 缺 dashboard / 日志 / Kafka 查询入口，无法形成真实 dashboard evidence |
 | P2-F. `virtual-judge-npc-failure-drill-and-rollback` | 演练真实环境失败路径与回滚 | 阻塞（env_blocked） | 缺真实环境、回滚 owner 和执行窗口，不演练故障 |
-| P2-G. `virtual-judge-npc-real-env-evidence-and-release-decision` | 汇总 canary evidence 并给出 release decision | 待执行 | 下一步汇总 `env_blocked` evidence，并给出不进入 Beta 小流量的 release decision |
-| P3-H. `virtual-judge-npc-real-env-findings-remediation` | 针对真实 canary 发现的问题进行最小修复 | 待执行（条件） | 仅在 P1-D/P1-E/P2-F 发现真实缺陷后执行；不得扩展强暂停或新能力 |
+| P2-G. `virtual-judge-npc-real-env-evidence-and-release-decision` | 汇总 canary evidence 并给出 release decision | 已完成（env_blocked） | 已输出 [虚拟裁判NPC_Beta真实环境ReleaseDecision.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_Beta真实环境ReleaseDecision.md)，结论为不进入 Beta 小流量 |
+| P3-H. `virtual-judge-npc-real-env-findings-remediation` | 针对真实 canary 发现的问题进行最小修复 | 阻塞（无真实 canary findings） | P1-D/P1-E/P2-F 未执行，无真实缺陷可修；不得扩展强暂停或新能力 |
 | P4-I. `virtual-judge-npc-beta-real-env-stage-closure` | 阶段收口，回写 completed/todo 并归档计划 | 待执行 | 仅在 evidence 结论明确后执行 |
 
 ### 下一开发模块建议
 
-1. 默认下一步执行 P2-G `virtual-judge-npc-real-env-evidence-and-release-decision`。
-2. P1-C 已输出 `env_blocked`，因此 P1-D/P1-E/P2-F 暂不执行。
-3. P2-G 应汇总缺失项、下一次触发条件和 Beta 小流量 release decision。
+1. 默认下一步执行 P4-I `virtual-judge-npc-beta-real-env-stage-closure`。
+2. P2-G 已输出 `env_blocked / no-go` release decision，P1-D/P1-E/P2-F/P3-H 不继续执行。
+3. P4-I 应回写 completed/todo，归档本计划，并保持真实环境 canary 缺口为后置债。
 
 ## 5. 模块详情
 
@@ -276,6 +276,13 @@
 3. 若结论为 `env_blocked`，必须列明缺失项与下一次触发条件。
 4. 若结论为 `fail` 或 `rollback_required`，必须列明用户影响、回滚动作和修复计划。
 
+完成结果：
+
+1. 已汇总 P1-B preflight 与 P1-C readiness gate 证据。
+2. 已确认 P1-D/P1-E/P2-F 因 `env_blocked` 未执行，因此没有真实 canary findings。
+3. 已输出 [虚拟裁判NPC_Beta真实环境ReleaseDecision.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_Beta真实环境ReleaseDecision.md)。
+4. release decision 为 `env_blocked / no-go`：不进入 Beta 小流量，不宣称真实环境通过，待真实环境输入齐备后重新触发 P1-C。
+
 ### P3-H. `virtual-judge-npc-real-env-findings-remediation`
 
 目标：
@@ -370,3 +377,4 @@
 1. 2026-05-04：生成 `virtual-judge-npc-beta-real-env-canary-dashboard-closure` 下一阶段开发计划；P0-A 已完成，下一步建议执行 P1-B。
 2. 2026-05-04：执行 P1-B preflight，完成工作区、迁移、配置入口、topic 与外部输入缺口基线；下一步建议执行 P1-C readiness gate。
 3. 2026-05-04：执行 P1-C readiness gate，结论为 `env_blocked`；P1-D/P1-E/P2-F 暂停，下一步建议执行 P2-G release decision。
+4. 2026-05-04：执行 P2-G release decision，结论为 `env_blocked / no-go`；下一步建议执行 P4-I 阶段收口。
