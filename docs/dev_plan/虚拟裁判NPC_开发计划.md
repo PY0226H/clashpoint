@@ -53,7 +53,7 @@
 | P1-C. `virtual-judge-npc-frontend-shell` | 前端新增 NPC 动态展示壳、action feed 与轻量动效 | 已完成 | 已新增 `DebateNpcPanel`、`DebateNpcModel`、CSS 动效和 DebateRoomPage room event 接入 |
 | P2-D. `virtual-judge-npc-service-skeleton-executor-router` | 新增 `npc_service/`、LLM provider adapter、executor router、rule fallback | 已完成 | `llm_executor_v1` 为主路径，rule 只兜底；已覆盖 guard、fallback、chat client 与 FastAPI routes |
 | P2-E. `virtual-judge-npc-event-consumption-loop` | 消费 `DebateMessageCreated`，拉取 context，提交 candidate | 已完成 | 本地 webhook trigger 已打通；后续 Kafka/event-bus consumer 接管后移除 webhook |
-| P3-F. `virtual-judge-npc-e2e-smoke-and-fallback-hardening` | 端到端 smoke、LLM fallback、限频、幂等、隔离验证 | 待执行 | 证明 NPC 不影响发言、置顶、Judge / Draw |
+| P3-F. `virtual-judge-npc-e2e-smoke-and-fallback-hardening` | 端到端 smoke、LLM fallback、限频、幂等、隔离验证 | 已完成 | 已用 in-process full smoke 与 targeted tests 证明 fallback、隔离、replay/UI 合同和发言主链不受影响 |
 | P4-G. `virtual-judge-npc-stage-closure` | 阶段收口与长期文档同步 | 待执行 | 根据实际完成情况写 completed/todo，不复制活动计划原文 |
 
 ## 4. 开发切片详情
@@ -343,6 +343,15 @@
 7. NPC 不输出胜负预测、阵营评分、正式裁决字段。
 8. NPC 不提供私聊。
 
+完成记录（2026-05-03）：
+
+1. 已新增 `npc_service` in-process full webhook smoke，覆盖 `DebateMessageCreated` trigger -> chat context fetch -> executor router -> chat candidate callback。
+2. 已验证 LLM disabled 时回退 `rule_executor_v1` 并成功提交候选动作。
+3. 已验证 LLM 输出 `winner` 等正式裁决字段时触发 fallback，回调 chat 的 candidate 不携带正式裁决字段。
+4. 已新增 chat targeted test，证明未配置 NPC / `npc_service` 不可用时，用户发言仍正常落库且不会产生 NPC action。
+5. 已补跑 app-shell、debate-domain、realtime-sdk targeted tests，覆盖 NPC 展示、payload guard、room event/replay 合同。
+6. 本阶段采用自动化 in-process smoke 作为可重复证据；真实多服务浏览器 smoke 可在 P4-G 阶段收口说明中作为后续人工/运行态证据项记录。
+
 ### P4-G. `virtual-judge-npc-stage-closure`
 
 目标：
@@ -396,3 +405,4 @@
 - 2026-05-03：完成 P1-C `virtual-judge-npc-frontend-shell`；Debate Room 已展示虚拟裁判 NPC 面板，支持状态、action feed、赞赏目标、轻量动效和 replay 去重；下一步执行 P2-D 独立 `npc_service` 与 executor router。
 - 2026-05-03：完成 P2-D `virtual-judge-npc-service-skeleton-executor-router`；独立 `npc_service` 已具备 FastAPI skeleton、OpenAI-compatible LLM adapter、executor router、rule fallback、本地 guard、chat client 和 targeted tests；下一步执行 P2-E 事件消费闭环。
 - 2026-05-03：完成 P2-E `virtual-judge-npc-event-consumption-loop`；chat 已提供公开 context 查询接口，`npc_service` 已具备 `DebateMessageCreated` webhook trigger、context fetch、executor decision、candidate callback、submit retry/DLQ 记录和 targeted tests；下一步执行 P3-F e2e smoke 与 fallback/隔离加固。
+- 2026-05-03：完成 P3-F `virtual-judge-npc-e2e-smoke-and-fallback-hardening`；已补 in-process full smoke、LLM disabled fallback、违规 LLM 输出隔离、NPC 不可用不阻塞发言，以及 app-shell / debate-domain / realtime-sdk targeted 证据；下一步执行 P4-G 阶段收口。

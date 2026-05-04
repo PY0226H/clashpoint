@@ -4,6 +4,20 @@ use serde_json::{json, Value};
 const NPC_ID: &str = "virtual_judge_default";
 
 #[tokio::test]
+async fn npc_unavailable_should_not_block_debate_message_creation() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
+
+    let message =
+        seed_joined_message(&state, session_id, 1, "pro", "normal message without npc").await?;
+
+    assert_eq!(message.session_id, session_id);
+    assert_eq!(message.content, "normal message without npc");
+    assert_eq!(npc_action_count(&state).await?, 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn npc_decision_context_should_return_public_room_messages_only() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
     let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
