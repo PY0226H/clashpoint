@@ -1,380 +1,338 @@
 # 虚拟裁判 NPC 下一阶段开发计划
 
 更新时间：2026-05-04
-文档状态：active，P2-G 已完成（env_blocked / no-go）
-当前主线：`virtual-judge-npc-beta-real-env-canary-dashboard-closure`
+文档状态：active，P1-B 已完成
+当前主线：`virtual-judge-npc-real-env-input-unblock-pack`
 
 关联 PRD：[虚拟裁判NPC完整PRD.md](/Users/panyihang/Documents/EchoIsle/docs/PRD/虚拟裁判NPC完整PRD.md)
 关联系统设计：[虚拟裁判NPC_系统设计.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_系统设计.md)
-关联 canary 手册：[虚拟裁判NPC_LLM_Canary运行手册.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_LLM_Canary运行手册.md)
 关联 readiness 清单：[虚拟裁判NPC_Beta真实环境Readiness输入清单.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_Beta真实环境Readiness输入清单.md)
 关联 dashboard 基线：[虚拟裁判NPC_CanaryDashboard查询与告警基线.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_CanaryDashboard查询与告警基线.md)
-关联 pause_suggestion 证据：[虚拟裁判NPC_pause_suggestion_Smoke与Guard证据.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_pause_suggestion_Smoke与Guard证据.md)
-上一阶段归档：[20260504T230728Z-virtual-judge-npc-real-env-pause-stage-closure.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/archive/虚拟裁判/20260504T230728Z-virtual-judge-npc-real-env-pause-stage-closure.md)
-完成快照：[completed.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/completed.md) B52
+关联 preflight：[虚拟裁判NPC_Beta真实环境Preflight基线.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_Beta真实环境Preflight基线.md)
+关联 readiness gate：[虚拟裁判NPC_Beta真实环境ReadinessGate证据.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_Beta真实环境ReadinessGate证据.md)
+关联 release decision：[虚拟裁判NPC_Beta真实环境ReleaseDecision.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_Beta真实环境ReleaseDecision.md)
+关联 Owner 交付合同：[虚拟裁判NPC_真实环境输入Owner交付合同.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_真实环境输入Owner交付合同.md)
+上一阶段归档：[20260504T235621Z-virtual-judge-npc-beta-real-env-no-go-stage-closure.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/archive/虚拟裁判/20260504T235621Z-virtual-judge-npc-beta-real-env-no-go-stage-closure.md)
+完成快照：[completed.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/completed.md) B53
 后置待办：[todo.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/todo.md) C47
 
 ---
 
 ## 1. 计划定位
 
-本计划承接 B52 `virtual-judge-npc-real-env-and-pause-suggestion-stage-closure`。
+本计划承接 B53 `virtual-judge-npc-beta-real-env-no-go-stage-closure`。
 
-上一阶段已经完成仓内闭环：
+上一阶段结论已经明确：
 
-1. 虚拟裁判 NPC 已采用独立 `npc_service` 架构，`llm_executor_v1` 为体验主路径，`rule_executor_v1` 为 LLM 不可用或输出违规时的 fallback。
-2. `chat` 是 NPC action 的唯一房间事实源，`notify_server` 只广播已确认事件。
-3. 前端 Debate Room 已展示公开虚拟裁判 NPC 动态面板、动作 feed、公开呼叫和反馈入口。
-4. `pause_suggestion` 已完成合同冻结、跨层实现、观战 replay、只读 smoke 与 guard 证据。
-5. NPC 仍保持娱乐导向，不私聊用户，不替代 AI 裁判团正式裁决报告。
+1. 仓内 `pause_suggestion`、LLM/rule executor、guard、notify replay、前端展示和 smoke 已完成。
+2. `npc_service` 已有 OpenAI-compatible provider、LLM canary、runtime metrics、Kafka consumer、DLQ、chat callback 等配置入口。
+3. P1-B/P1-C/P2-G 已完成真实环境证据化，结论为 `env_blocked / no-go`。
+4. 阻塞原因不是仓内功能缺口，而是真实 Beta / staging 输入缺失：服务入口、provider、Kafka、dashboard、canary session、测试账号、Ops 权限、回滚 owner、目标环境 migration 证据均未齐备。
 
-本阶段不继续扩展新能力，而是收敛 C47 中最高优先级的真实环境债：
+因此下一阶段不重复跑 readiness gate，也不进入强暂停状态机，而是先做 **真实环境输入解锁与交付包**：
 
-1. 在 Beta / staging 环境验证真实 OpenAI-compatible provider、Kafka/event-bus、chat callback、notify WS 和前端房间联动。
-2. 让 dashboard / 日志查询能回答真实 canary 中的 executor、fallback、callback、DLQ、成本、延迟、熔断和拒绝原因。
-3. 形成 `pass / env_blocked / fail / rollback_required` 的 evidence 结论，为后续 Beta 开关或强暂停状态机决策提供依据。
+1. 把真实环境所需输入拆成 owner、格式、验收口径和脱敏证据模板。
+2. 把“拿到输入后如何重新触发 P1-C”固化成可执行流程。
+3. 把真实 canary 前必须完成的 migration、服务、Kafka、dashboard、账号、回滚窗口全部变成 checklist / handoff contract。
+4. 在不接触真实 secret 的前提下，让下一次真实环境窗口可以直接进入 readiness gate，而不是再次因为输入散落而 no-go。
 
 ## 2. 当前代码事实快照
 
-| 领域 | 当前事实 | 代码 / 文档证据 |
+| 领域 | 当前事实 | 下一阶段影响 |
 | --- | --- | --- |
-| `chat` action spine | `debate_npc_actions` 已支持 `speak/praise/effect/state_changed/pause_suggestion`；candidate 会校验能力位、正式裁决字段、幂等和 replay event | [npc.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/debate/npc.rs), [npc_action.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/debate/tests/npc_action.rs), [20260504123000_debate_npc_pause_suggestion_action_type.sql](/Users/panyihang/Documents/EchoIsle/chat/migrations/20260504123000_debate_npc_pause_suggestion_action_type.sql) |
-| `allow_pause` 边界 | `allow_pause=true` 只允许 `pause_suggestion`，不授权强暂停 / 恢复；`pause_review` 已可作为公开呼叫进入 NPC 决策上下文 | [npc.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/debate/npc.rs), [npc_action.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/debate/tests/npc_action.rs) |
-| `npc_service` executor | router 已覆盖 LLM、canary session 限制、成本/延迟 metrics、熔断、`no_action`、rule fallback 和 guard 拒绝 | [executors.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/executors.py), [llm_runtime.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/llm_runtime.py), [guard.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/guard.py), [test_executors.py](/Users/panyihang/Documents/EchoIsle/npc_service/tests/test_executors.py) |
-| 真实 LLM provider | OpenAI-compatible provider 与 prompt guard 已有仓内 mock 验证；真实 provider canary 尚未执行 | [openai_provider.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/openai_provider.py), [test_openai_provider.py](/Users/panyihang/Documents/EchoIsle/npc_service/tests/test_openai_provider.py), [虚拟裁判NPC_LLM_Canary运行手册.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_LLM_Canary运行手册.md) |
-| 事件消费 | `npc_service` 已有 `DebateMessageCreated` / `DebateNpcPublicCallCreated` consumer 与 DLQ 测试；真实 Kafka topic / consumer group 尚未在 Beta/staging 证据中确认 | [event_consumer.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/event_consumer.py), [test_event_consumer.py](/Users/panyihang/Documents/EchoIsle/npc_service/tests/test_event_consumer.py) |
-| notify replay | `DebateNpcActionCreated` 可 replay 给观战者，已补 `pause_suggestion` 只读观战测试 | [notif.rs](/Users/panyihang/Documents/EchoIsle/chat/notify_server/src/notif.rs), [ws.rs](/Users/panyihang/Documents/EchoIsle/chat/notify_server/src/ws.rs) |
-| 前端房间 | Debate Room 已支持 NPC action hydration、WS live event、`pause_suggestion` 展示、公开呼叫、反馈和观战只读 smoke | [DebateRoomPage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/DebateRoomPage.tsx), [DebateNpcPanel.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/components/DebateNpcPanel.tsx), [auth-smoke.spec.ts](/Users/panyihang/Documents/EchoIsle/frontend/tests/e2e/auth-smoke.spec.ts) |
-| 真实环境证据 | 仓内 smoke / guard 已通过；真实 Beta / staging canary、dashboard 截图、真实 provider 成本 / 延迟证据仍为 `env_blocked` | [虚拟裁判NPC_pause_suggestion_Smoke与Guard证据.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_pause_suggestion_Smoke与Guard证据.md), [todo.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/todo.md) C47 |
-
-计划生成时工作区仍有上一阶段收口文档未提交；开始执行真实环境阶段前，建议先确认这些文档是否纳入同一提交，避免 evidence 口径在后续计划中漂移。
+| `chat` NPC fact source | `debate_npc_actions`、candidate handler、public call、feedback、OpenAPI 与 outbox/replay 已存在；`pause_suggestion` 已接入能力位与 guard | 下一阶段不改 action 合同，重点确认目标环境 migration 与内部 API 可用 |
+| `npc_service` executor | `llm_executor_v1`、`rule_executor_v1`、canary 限制、成本/延迟 metrics、熔断、guard、`no_action`、fallback 均已有代码和测试 | 下一阶段只整理真实 provider 与 canary env 输入，不改变 executor 策略 |
+| Event consumer | `NPC_EVENT_CONSUMER_ENABLED`、Kafka brokers/topic/group/client/DLQ 配置入口存在 | 下一阶段需要真实 topic prefix、consumer group、offset/lag/DLQ 查询入口 |
+| OpenAI-compatible provider | `NPC_OPENAI_*` 配置入口存在，仓内有 mock provider 测试；真实 provider 未验证 | 下一阶段需要 provider owner、安全注入方式、模型、成本口径和脱敏响应证据 |
+| Frontend / notify | Debate Room 已支持 NPC live / replay、观战只读和 `pause_suggestion` 展示 | 下一阶段需要真实 frontend/notify URL、参赛/观战账号、重连 replay 验证窗口 |
+| 真实环境证据 | P1-C/P2-G 已判定 `env_blocked / no-go` | 下一阶段目标是让阻塞项具备可交付输入，而不是宣称 pass |
 
 ## 3. 冻结边界
 
-本阶段继续遵守以下边界：
+本阶段继续遵守：
 
 1. 虚拟裁判 NPC 永远不替代 AI 裁判团生成正式裁决报告。
-2. 虚拟裁判 NPC 不输出胜负判定、阵营评分、正式裁决字段或 judge trace。
+2. 虚拟裁判 NPC 不输出胜负判定、阵营评分、正式裁决字段、judge trace 或 review queue 字段。
 3. 用户不能私聊虚拟裁判 NPC。
-4. NPC 不代替用户发言，不自动参赛，不站队。
-5. `pause_suggestion` 只表达公开建议，不改变房间状态、不禁用输入、不冻结倒计时。
-6. 本阶段不实现 `soft_pause/hard_pause/resume` 强暂停状态机。
-7. 真实环境 canary 未执行前，不得把本地 mock、仓内 smoke、rule-only fallback 或字段存在宣称为真实环境通过。
-8. 若真实 LLM、Kafka、dashboard 或测试账号缺失，本阶段只能输出 `env_blocked`，不能硬写 `pass`。
+4. `pause_suggestion` 只是公开建议，不改变房间状态、不禁用输入、不冻结倒计时。
+5. 本阶段不实现 `soft_pause/hard_pause/resume` 强暂停状态机。
+6. 不读取、不复制、不提交真实 secret、cookie、token、手机号、邮箱、密码或完整用户隐私文本。
+7. 不把本地 mock、仓内 smoke、rule fallback、字段存在、配置文件存在宣称为真实环境通过。
+8. 没有真实环境输入前，任何 release 结论仍只能保持 `env_blocked / no-go`。
 
 ## 4. 阶段目标
 
 ### 4.1 产品目标
 
-1. 让运营和产品可以判断虚拟裁判 NPC 是否具备进入 Beta 小流量的证据。
-2. 证明用户在真实房间内能清楚区分娱乐 NPC 行为与正式 AI 裁判团裁决。
-3. 证明 `pause_suggestion` 在真实房间中只是建议，不会制造“房间已暂停”的误解。
-4. 形成明确回滚路径：真实 LLM 出错时，房间发言、观战和正式裁决主链不受影响。
+1. 为虚拟裁判 NPC 进入真实 Beta 小流量前建立清晰的输入交付口径。
+2. 让产品、运营、后端、前端、基础设施和模型 provider 各自知道需要交付什么证据。
+3. 保护用户对娱乐 NPC 与正式 AI 裁判团裁决的区分，避免为了推进 canary 牺牲正式裁决隔离。
 
 ### 4.2 工程目标
 
-1. 完成真实 Beta / staging provider、Kafka/event-bus、chat、notify、frontend、npc_service 的端到端 canary。
-2. 固化 dashboard / 日志 / SQL / Kafka / DLQ 查询证据，让关键异常可定位。
-3. 演练 provider 不可用、canary 关闭、callback 拒绝、`npc_service` 停止等故障场景。
-4. 产出 evidence 文档，并根据真实结果给出 `pass / env_blocked / fail / rollback_required` 结论。
+1. 输出真实环境输入 handoff contract。
+2. 输出脱敏 evidence 模板与 redaction policy。
+3. 输出重新触发 P1-C readiness gate 的执行顺序。
+4. 输出真实环境 migration / service / Kafka / dashboard / account / rollback owner 的缺口矩阵。
+5. 若发现仓内文档、脚本或配置模板与当前代码不一致，只做最小文档修正；不扩展业务能力。
 
 ### 已完成/未完成矩阵
 
 | 模块 | 目标 | 状态 | 说明 |
 | --- | --- | --- | --- |
-| P0-A. `virtual-judge-npc-beta-real-env-plan-current-state` | 基于 PRD、module_design 和当前代码事实生成下一阶段计划 | 已完成 | 本文档即该模块输出；用户已确认执行，default slot 已绑定本主线 |
-| P1-B. `virtual-judge-npc-preflight-working-tree-and-config-baseline` | 开始真实环境前整理上一阶段收口状态、迁移状态、配置清单和执行窗口 | 已完成 | 已输出 [虚拟裁判NPC_Beta真实环境Preflight基线.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_Beta真实环境Preflight基线.md)；本机 DB 迁移为 pending，真实环境输入仍需 P1-C 核验 |
-| P1-C. `virtual-judge-npc-beta-readiness-gate-run` | 按 readiness 清单执行真实环境前置检查，输出 `ready / env_blocked / fail` | 已完成（env_blocked） | 已输出 [虚拟裁判NPC_Beta真实环境ReadinessGate证据.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_Beta真实环境ReadinessGate证据.md)；缺真实 provider、Kafka、服务入口、dashboard、账号与 Ops 权限 |
-| P1-D. `virtual-judge-npc-single-session-llm-canary-run` | 在单个 Beta / staging 房间跑真实 LLM canary | 阻塞（env_blocked） | P1-C 未 ready，不执行真实 canary，避免把本地证据误写成真实环境 pass |
-| P1-E. `virtual-judge-npc-canary-dashboard-evidence-pack` | 固化 dashboard / 日志 / SQL / Kafka / DLQ 查询证据 | 阻塞（env_blocked） | 缺 dashboard / 日志 / Kafka 查询入口，无法形成真实 dashboard evidence |
-| P2-F. `virtual-judge-npc-failure-drill-and-rollback` | 演练真实环境失败路径与回滚 | 阻塞（env_blocked） | 缺真实环境、回滚 owner 和执行窗口，不演练故障 |
-| P2-G. `virtual-judge-npc-real-env-evidence-and-release-decision` | 汇总 canary evidence 并给出 release decision | 已完成（env_blocked） | 已输出 [虚拟裁判NPC_Beta真实环境ReleaseDecision.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_Beta真实环境ReleaseDecision.md)，结论为不进入 Beta 小流量 |
-| P3-H. `virtual-judge-npc-real-env-findings-remediation` | 针对真实 canary 发现的问题进行最小修复 | 阻塞（无真实 canary findings） | P1-D/P1-E/P2-F 未执行，无真实缺陷可修；不得扩展强暂停或新能力 |
-| P4-I. `virtual-judge-npc-beta-real-env-stage-closure` | 阶段收口，回写 completed/todo 并归档计划 | 待执行 | 仅在 evidence 结论明确后执行 |
+| P0-A. `virtual-judge-npc-real-env-input-unblock-plan-current-state` | 基于 PRD、module_design、B53/C47 和当前代码事实生成下一阶段计划 | 已完成 | 本文档即该模块输出；已绑定 default slot 执行 |
+| P1-B. `virtual-judge-npc-real-env-input-owner-handoff-contract` | 生成真实环境输入 owner / 交付格式 / 验收口径清单 | 已完成 | 已输出 [Owner 交付合同](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_真实环境输入Owner交付合同.md)，面向工程、运营、基础设施、前端、模型 provider；不记录 secret |
+| P1-C. `virtual-judge-npc-redacted-evidence-template-pack` | 生成脱敏 evidence 模板包 | 待执行 | 下一步建议执行；覆盖 service health、provider、Kafka、dashboard、账号、rollback、frontend/notify smoke |
+| P1-D. `virtual-judge-npc-readiness-gate-rerun-playbook` | 生成重新触发 P1-C 的执行手册 | 待执行 | 明确输入齐备后如何从 `env_blocked` 切回 `ready` gate |
+| P2-E. `virtual-judge-npc-target-env-migration-and-service-map` | 固化目标环境 migration / service / route / healthcheck 对照表 | 待执行 | 不执行真实迁移；只规定检查入口、命令和通过口径 |
+| P2-F. `virtual-judge-npc-kafka-dashboard-query-contract` | 将 Kafka / DLQ / dashboard 查询需求转成可交付 contract | 待执行 | 明确 query owner、字段、截图 / export 口径和 P0/P1 告警 |
+| P2-G. `virtual-judge-npc-canary-session-and-account-pack` | 定义 canary session、参赛/观战/Ops 账号、权限和数据合规输入包 | 待执行 | 不记录密码/token；只记录角色、权限和可验证入口 |
+| P3-H. `virtual-judge-npc-real-env-unblock-decision` | 汇总输入交付状态，给出是否可重新触发 readiness gate 的结论 | 待执行 | 输出 `ready_to_rerun_gate / still_env_blocked` |
+| P4-I. `virtual-judge-npc-real-env-input-unblock-stage-closure` | 阶段收口，回写 completed/todo 并归档计划 | 待执行 | 只在 P3-H 有结论后执行 |
 
 ### 下一开发模块建议
 
-1. 默认下一步执行 P4-I `virtual-judge-npc-beta-real-env-stage-closure`。
-2. P2-G 已输出 `env_blocked / no-go` release decision，P1-D/P1-E/P2-F/P3-H 不继续执行。
-3. P4-I 应回写 completed/todo，归档本计划，并保持真实环境 canary 缺口为后置债。
+1. 默认下一步执行 P1-C `virtual-judge-npc-redacted-evidence-template-pack`。
+2. 若后续输入收集发现真实环境 owner 无法明确，应在 P3-H 结论中保持 `still_env_blocked`，不生成可执行 canary。
+3. 只有 P3-H 输出 `ready_to_rerun_gate` 后，才允许重新生成或恢复真实环境 readiness gate 计划。
 
 ## 5. 模块详情
 
-### P0-A. `virtual-judge-npc-beta-real-env-plan-current-state`
+### P0-A. `virtual-judge-npc-real-env-input-unblock-plan-current-state`
 
 目标：
 
-1. 根据 PRD、系统设计、canary 手册、readiness 清单、dashboard 基线、B52/C47 和当前代码事实生成下一阶段计划。
-2. 明确本阶段只做真实环境 canary/dashboard closure，不做强暂停状态机。
-3. 明确 `env_blocked` 是合法阶段结论，避免为了推进计划伪造真实环境 pass。
+1. 基于最新 PRD、module design、B53 no-go 收口和当前代码事实生成下一阶段计划。
+2. 明确本阶段是“输入解锁”，不是“真实 canary pass”。
+3. 避免重复执行 P1-C 并再次得到同样的 `env_blocked`。
 
 验收标准：
 
-1. 计划包含执行矩阵、下一模块建议、模块 DoD、验证策略和冻结边界。
-2. 计划明确真实 provider / Kafka / dashboard 证据缺失时的处理方式。
-3. 计划引用当前代码事实，而不是只复述设计文档。
+1. 计划包含执行矩阵、下一开发模块建议、冻结边界和模块 DoD。
+2. 计划明确不读取 / 不提交真实 secret。
+3. 计划明确真实输入齐备前不得进入 Beta 小流量。
 
-### P1-B. `virtual-judge-npc-preflight-working-tree-and-config-baseline`
+### P1-B. `virtual-judge-npc-real-env-input-owner-handoff-contract`
 
 目标：
 
-1. 在进入真实环境前，确认上一阶段收口文档、ignored evidence、迁移和配置模板状态。
-2. 确认本阶段不会在未提交或口径不一致的基础上继续叠 evidence。
-3. 准备真实环境执行窗口所需的非 secret 输入。
+1. 将真实环境 canary 输入拆成 owner / 交付物 / 验收口径。
+2. 明确每类输入缺失时的阻塞结论。
+3. 让下一次 P1-C 不再依赖口头信息或散落配置。
 
-执行范围：
+输出范围：
 
-1. `git status` 与上一阶段文档归档状态。
-2. `chat` migration 状态：`20260503090000_debate_npc_action_spine.sql`、`20260504100000_debate_npc_ops_control_plane.sql`、`20260504123000_debate_npc_pause_suggestion_action_type.sql`。
-3. `npc_service` canary env 模板：`NPC_SERVICE_LLM_ENABLED`、`NPC_SERVICE_LLM_CANARY_ENABLED`、`NPC_SERVICE_LLM_CANARY_SESSION_IDS`、provider base URL、模型、成本上限、Kafka topic/group。
-4. 测试账号、canary session、观战账号、Ops 开关权限。
+1. `docs/module_design/虚拟裁判NPC/虚拟裁判NPC_真实环境输入Owner交付合同.md`
+2. 输入分类：
+   - 环境与服务入口
+   - provider 与模型
+   - Kafka / event-bus / DLQ
+   - dashboard / 日志
+   - canary session 与测试账号
+   - Ops 开关与回滚 owner
+   - 目标环境 migration
+3. 每项输入只记录 owner、脱敏摘要、证据位置和验收口径，不记录 secret。
 
 验收标准：
 
-1. 明确哪些上一阶段文件需要纳入提交或保留为本地证据。
-2. 明确真实环境执行所需输入是否齐备。
-3. 若缺少必需输入，输出缺口清单并进入 P1-C `env_blocked`。
-
-建议验证：
-
-1. `git status --short`
-2. `git diff --check`
-3. `bash scripts/quality/harness_docs_lint.sh`
-4. `sqlx migrate info` 或当前项目等价迁移核验命令。
+1. 每个输入项都有明确 owner 或标记为 `owner_missing`。
+2. 每个输入项都有交付格式和 pass / blocked 口径。
+3. 合同能直接作为下一次 readiness gate 的前置 checklist。
 
 完成结果：
 
-1. 已确认上一阶段仍有未提交收口文档与新归档文件。
-2. 已确认 `pause_suggestion` smoke 证据与本次 preflight 文档受 `docs/**` ignore 影响，提交时需要 `git add -f`。
-3. 已确认三条 NPC migration 文件存在。
-4. 已执行本机 `sqlx migrate info`；当前本机 `chat` 数据库显示包括 NPC 迁移在内均为 `pending`，不能作为真实 canary ready 证据。
-5. 已确认 `npc_service` canary env、Kafka topic、DLQ、OpenAI-compatible provider 配置入口存在。
-6. 已确认真实 provider、Kafka broker/topic/group、dashboard、canary session、测试账号与 Ops 权限仍需外部输入。
+1. 已输出 [虚拟裁判NPC_真实环境输入Owner交付合同.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_真实环境输入Owner交付合同.md)。
+2. 合同按环境、provider、LLM canary、fallback、chat、migration、Kafka、dashboard、frontend/notify、账号、Ops 回滚和数据合规拆分 owner。
+3. 合同明确当前真实输入仍为 `owner_missing / input_missing`，只能作为 P1-C/P1-D/P2 系列交付前置，不能宣称真实环境通过。
 
-### P1-C. `virtual-judge-npc-beta-readiness-gate-run`
+### P1-C. `virtual-judge-npc-redacted-evidence-template-pack`
 
 目标：
 
-1. 按 readiness 清单执行真实环境 gate。
-2. 给出 `ready / env_blocked / fail` 三态结论。
-3. 不跑真实用户影响面之前，先确认可回滚、可观测、可停止。
+1. 输出真实环境 evidence 模板。
+2. 统一脱敏规则，避免把 secret、用户隐私或内部 token 粘贴进文档。
 
-执行范围：
+输出范围：
 
-1. Beta / staging `chat`、`notify_server`、`npc_service`、frontend web/desktop 入口健康检查。
-2. 真实 OpenAI-compatible provider 可用性检查。
-3. Kafka/event-bus topic、consumer group、offset、DLQ 路径检查。
-4. chat internal API auth 与 callback auth 检查。
-5. dashboard / 日志聚合权限检查。
+1. `docs/module_design/虚拟裁判NPC/虚拟裁判NPC_真实环境Evidence脱敏模板.md`
+2. 模板覆盖：
+   - `/healthz`
+   - runtime metrics
+   - provider 响应摘要
+   - Kafka topic / group / offset / lag
+   - DLQ
+   - chat candidate accepted / rejected
+   - notify live / replay
+   - frontend 参赛 / 观战截图或 trace
+   - rollback 前后快照
 
 验收标准：
 
-1. `npc_service` `/healthz` 与 `/api/internal/npc/runtime/metrics` 可访问且鉴权符合预期。
-2. provider 可返回真实响应，或明确记录不可用原因。
-3. Kafka topic / consumer group 能看到目标事件流或明确记录缺失原因。
-4. dashboard / 日志入口能查询 P1-E 所需字段，或明确记录缺失原因。
-5. 任一关键项缺失时输出 `env_blocked`，不继续 P1-D。
+1. 模板明确允许记录字段和禁止记录字段。
+2. 每个截图 / 日志 / export 都有脱敏要求。
+3. 模板能支持 `pass / env_blocked / fail / rollback_required` 四种结论。
 
-完成结果：
-
-1. 已检查当前 shell 的 NPC / OpenAI-compatible provider / Kafka / chat internal key 关键配置键，均未注入。
-2. 已检查本地 `npc_service:6690` 与 `chat:6688` 监听状态，当前均无监听输出。
-3. 已确认仓内存在 `.env` 与历史 evidence env 文件，但本次未读取或输出任何 secret；配置文件存在不能替代真实 Beta / staging 证据。
-4. 已确认缺真实 provider、Kafka、dashboard、canary session、测试账号、Ops 权限、回滚 owner 与目标环境迁移通过证据。
-5. 已将结论写入 [虚拟裁判NPC_Beta真实环境ReadinessGate证据.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_Beta真实环境ReadinessGate证据.md)。
-
-### P1-D. `virtual-judge-npc-single-session-llm-canary-run`
+### P1-D. `virtual-judge-npc-readiness-gate-rerun-playbook`
 
 目标：
 
-1. 在一个指定 Beta / staging canary session 中启用真实 `llm_executor_v1`。
-2. 验证公开发言、公开呼叫和 `pause_review` 可以触发合法 NPC 行为。
-3. 验证非 canary session 不会被真实 LLM 处理。
+1. 固化从输入齐备到重新触发 P1-C 的流程。
+2. 避免直接跳到真实 LLM canary。
 
-执行范围：
+输出范围：
 
-1. 单 session canary 配置。
-2. 参赛用户发言触发 `DebateMessageCreated`。
-3. 参赛用户公开呼叫触发 `DebateNpcPublicCallCreated`。
-4. 观战用户实时进入与断线重连 replay。
-5. `pause_suggestion` 只展示建议，不改房间状态。
+1. `docs/module_design/虚拟裁判NPC/虚拟裁判NPC_ReadinessGate重跑手册.md`
+2. 执行顺序：
+   - 输入完整性检查
+   - secret 注入确认
+   - 目标环境 migration 状态确认
+   - service health
+   - Kafka / DLQ / dashboard query
+   - canary session / accounts / Ops rollback
+   - dry-run no-go / ready 判定
 
 验收标准：
 
-1. canary session 内至少产生一次真实 provider 驱动的合法 NPC action。
-2. `executorKind=llm_executor_v1`、model/provider、latency、token 或成本字段可查。
-3. 参赛双方和观战用户均可见 NPC action。
-4. replay 不丢、不重、不把 `pause_suggestion` 显示成“已暂停”。
-5. 非 canary session 被 `llm_canary_session_not_allowed` 阻断，并按配置 fallback 或静默。
+1. 手册明确何时可以输出 `ready_to_rerun_gate`。
+2. 手册明确任一关键项缺失时保持 `env_blocked`。
+3. 手册明确不能绕过 P1-C 直接执行 P1-D。
 
-### P1-E. `virtual-judge-npc-canary-dashboard-evidence-pack`
+### P2-E. `virtual-judge-npc-target-env-migration-and-service-map`
 
 目标：
 
-1. 把 P1-D 的运行态证据落到 dashboard / 日志 / SQL / Kafka / DLQ 查询包。
-2. 证明关键问题可以定位：谁生成、为什么 fallback、哪里拒绝、是否熔断、成本多少。
+1. 把目标环境的迁移与服务检查入口整理成对照表。
+2. 明确本机 DB pending 不能作为目标环境状态。
 
-执行范围：
+输出范围：
 
-1. `npc_service` runtime metrics 与 decision run。
-2. `chat` candidate accepted / rejected / failed 日志。
-3. `debate_npc_actions` 与 `event_outbox` 查询。
-4. Kafka offset、consumer lag、DLQ。
-5. notify live / replay / send_failed / lag。
-6. 前端 roomEvent trace 或 smoke 记录。
+1. `docs/module_design/虚拟裁判NPC/虚拟裁判NPC_目标环境Migration与服务地图.md`
+2. 对照：
+   - `chat` migration 三条 NPC 相关 migration
+   - `chat` internal NPC routes
+   - `npc_service` `/healthz` 和 runtime metrics
+   - `notify_server` WS live / replay
+   - frontend web / desktop 指向环境
+   - Ops 房间 NPC config
 
 验收标准：
 
-1. 每个关键字段都有查询入口、截图或导出。
-2. fallback reason、callback status、DLQ、latency、cost、circuit、guard rejected 均可查。
-3. dashboard 缺失时不得判定真实 canary `pass`，只能 `env_blocked` 或 `fail`。
+1. 每个检查项有目标环境命令 / URL 口径和通过标准。
+2. 明确哪些检查需要审批或真实环境权限。
+3. 不执行真实迁移，不记录真实连接串。
 
-### P2-F. `virtual-judge-npc-failure-drill-and-rollback`
+### P2-F. `virtual-judge-npc-kafka-dashboard-query-contract`
 
 目标：
 
-1. 演练真实环境中最可能发生的故障。
-2. 确认虚拟裁判 NPC 出问题时不会阻塞辩论主链。
-3. 确认运营可回滚到 rule fallback、静默或关闭 NPC。
+1. 把 dashboard 基线转换成真实环境 owner 可交付的 query contract。
+2. 明确下一次 canary 需要哪些截图、export 或日志片段。
 
-故障演练范围：
+输出范围：
 
-1. provider unavailable / timeout / rate limit。
-2. canary session 从 allowlist 移除。
-3. LLM 输出正式裁决字段或强暂停字段。
-4. `chat` candidate rejected。
-5. `npc_service` 停止或 Kafka consumer 停止。
-6. notify replay lag 或断线重连。
+1. `docs/module_design/虚拟裁判NPC/虚拟裁判NPC_Kafka与Dashboard交付合同.md`
+2. 覆盖字段：
+   - executor kind / fallback reason
+   - provider error code / latency / token / cost
+   - callback accepted / rejected / failed
+   - DLQ / retry exhausted
+   - Kafka offset / lag
+   - circuit state
+   - notify replay gap
 
 验收标准：
 
-1. 发言主链不阻塞。
-2. 正式 AI 裁判团链路不受 NPC 故障影响。
-3. provider 或 guard 失败可 fallback 到 rule 或静默。
-4. 回滚步骤可由工程或运营按文档执行。
-5. 失败、fallback、DLQ、熔断、callback 状态可观测。
+1. 每个 query 有 owner、入口、字段、时间窗口和脱敏要求。
+2. 明确没有 dashboard 时允许的临时日志证据。
+3. 明确缺任一 P0/P1 查询时不能判定 `pass`。
 
-### P2-G. `virtual-judge-npc-real-env-evidence-and-release-decision`
+### P2-G. `virtual-judge-npc-canary-session-and-account-pack`
 
 目标：
 
-1. 汇总 P1-C/P1-D/P1-E/P2-F 的真实环境证据。
-2. 给出 `pass / env_blocked / fail / rollback_required` 结论。
-3. 给出是否允许进入 Beta 小流量的建议。
+1. 定义 canary session、参赛账号、观战账号、Ops 权限和数据合规输入包。
+2. 避免真实 canary 开始后才发现账号或房间状态不可用。
 
-输出要求：
+输出范围：
 
-1. 新增 evidence 文档到 `docs/module_design/虚拟裁判NPC`。
-2. 标明环境、时间窗口、canary session、账号角色、服务版本、配置摘要。
-3. 隐去真实 secret、用户隐私和不可公开环境信息。
-4. 对所有异常给出处理状态：已修复、已回滚、后置债、阻塞。
+1. `docs/module_design/虚拟裁判NPC/虚拟裁判NPC_CanarySession与账号输入包.md`
+2. 覆盖：
+   - canary session 选择规则
+   - 房间 NPC config 必需能力位
+   - 正方 / 反方 / 观战 / Ops 角色
+   - 数据合规确认
+   - 回滚 owner 与窗口
+   - 不记录密码、token、手机号、邮箱明文
 
 验收标准：
 
-1. evidence 能支撑最终结论。
-2. 若结论为 `pass`，必须同时具备真实 provider、Kafka、callback、notify、frontend、dashboard / 日志证据。
-3. 若结论为 `env_blocked`，必须列明缺失项与下一次触发条件。
-4. 若结论为 `fail` 或 `rollback_required`，必须列明用户影响、回滚动作和修复计划。
+1. 输入包能支持下一次真实环境 P1-C。
+2. 能明确区分参赛和观战权限。
+3. 能证明回滚 owner 有执行关闭动作的权限。
 
-完成结果：
-
-1. 已汇总 P1-B preflight 与 P1-C readiness gate 证据。
-2. 已确认 P1-D/P1-E/P2-F 因 `env_blocked` 未执行，因此没有真实 canary findings。
-3. 已输出 [虚拟裁判NPC_Beta真实环境ReleaseDecision.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/虚拟裁判NPC/虚拟裁判NPC_Beta真实环境ReleaseDecision.md)。
-4. release decision 为 `env_blocked / no-go`：不进入 Beta 小流量，不宣称真实环境通过，待真实环境输入齐备后重新触发 P1-C。
-
-### P3-H. `virtual-judge-npc-real-env-findings-remediation`
+### P3-H. `virtual-judge-npc-real-env-unblock-decision`
 
 目标：
 
-1. 对真实 canary 发现的问题做最小修复。
-2. 只修真实环境暴露出的缺陷，不扩展新能力。
+1. 汇总 P1-B 到 P2-G 的输入交付状态。
+2. 给出是否可以重新触发 P1-C readiness gate 的结论。
 
-允许范围：
+输出范围：
 
-1. 配置解析、healthcheck、metrics 字段、日志字段、dashboard 查询脚本。
-2. provider 超时、fallback reason、DLQ 标记、callback 错误分类。
-3. 前端真实 roomEvent 展示或 replay hydration 缺陷。
-4. notify live / replay 一致性问题。
-
-禁止范围：
-
-1. 强暂停 / 恢复状态机。
-2. 私聊 NPC。
-3. 官方裁决字段。
-4. 新增未在 PRD / 系统设计确认的 NPC 能力。
+1. `docs/module_design/虚拟裁判NPC/虚拟裁判NPC_真实环境输入解锁Decision.md`
+2. 结论只允许：
+   - `ready_to_rerun_gate`
+   - `still_env_blocked`
 
 验收标准：
 
-1. 每个修复都有真实故障证据和 targeted regression。
-2. 修复后重新执行相关 canary / drill 或给出无法执行原因。
+1. 若为 `ready_to_rerun_gate`，必须列出所有必需输入的证据位置。
+2. 若为 `still_env_blocked`，必须列出缺失 owner、缺失输入和下一次触发条件。
+3. 不允许直接输出真实环境 `pass`。
 
-### P4-I. `virtual-judge-npc-beta-real-env-stage-closure`
+### P4-I. `virtual-judge-npc-real-env-input-unblock-stage-closure`
 
 目标：
 
-1. 将本阶段主体结论写入 `completed.md`。
-2. 将真实环境缺口或后置能力写入 `todo.md`。
-3. 归档本开发计划，并重置活动计划。
+1. 将本阶段完成快照写入 `completed.md`。
+2. 将仍未齐备的真实环境债务写入 `todo.md`。
+3. 归档本计划并重置活动计划。
 
 验收标准：
 
 1. completed 只记录主体完成快照。
-2. todo 只记录延后技术债，不复制活动计划正文。
-3. 归档文档包含真实 evidence 结论和验证摘要。
+2. todo 只保留真实后置债，不复制活动计划正文。
+3. 归档文档记录 `ready_to_rerun_gate` 或 `still_env_blocked`。
 4. `harness_docs_lint.sh` 通过。
 
 ## 6. 验证策略
 
-### 6.1 本地回归基线
+本阶段主要是文档与交付口径，不默认运行业务测试。
 
-在进入真实环境前，建议至少复跑：
+建议验证：
 
-1. `cargo test -p chat-server npc_action`
-2. `cargo test -p notify-server debate_room_ws_handler_should_replay_pause_suggestion_to_readonly_spectator`
-3. `/Users/panyihang/Documents/EchoIsle/ai_judge_service/.venv/bin/python -m pytest tests/test_guard.py tests/test_executors.py tests/test_event_processor.py`
-4. `pnpm --dir frontend --filter @echoisle/debate-domain test`
-5. `pnpm --dir frontend --filter @echoisle/realtime-sdk test`
-6. `pnpm --dir frontend --filter @echoisle/app-shell test -- DebateNpc`
-7. `pnpm --dir frontend --filter @echoisle/app-shell typecheck`
-8. targeted Playwright NPC / spectator smoke
-9. `git diff --check`
-10. `bash scripts/quality/harness_docs_lint.sh`
-
-### 6.2 真实环境验证
-
-真实 canary 必须覆盖：
-
-1. 真实 provider 成功生成合法 NPC action。
-2. provider 失败、超时、限流、输出违规时 fallback / silent 不阻塞主链。
-3. 参赛者、观战者实时可见与 replay 一致。
-4. `pause_suggestion` 不改变房间状态。
-5. 非 canary session 不走真实 LLM。
-6. dashboard / 日志能查询全部关键字段。
-7. 回滚后 NPC 关闭或降级生效。
+1. `git diff --check`
+2. `bash scripts/quality/harness_docs_lint.sh`
+3. 如新增脚本或配置模板，再补对应脚本自检或 dry-run。
 
 ## 7. 风险与处理
 
 | 风险 | 影响 | 处理 |
 | --- | --- | --- |
-| 真实 provider 或 secret 未提供 | 无法验证 LLM 主路径 | P1-C 输出 `env_blocked`，不伪造 pass |
-| Kafka / event-bus 与本地配置不一致 | NPC action 不触发或 DLQ 积压 | P1-C 先查 topic/group/offset，P2-F 演练 consumer 停止 |
-| dashboard 字段缺失 | 无法定位 fallback / 成本 / callback | P1-E 必须补查询入口；缺失则 `env_blocked` |
-| LLM 输出越权字段 | 可能混淆正式裁决 | guard 必须拒绝，chat candidate 再拒绝，P2-F 演练 |
-| `pause_suggestion` 被用户理解为已暂停 | 产品误解 | 前端只展示建议卡片，不显示暂停横幅，不禁用输入 |
-| NPC 故障影响发言主链 | 核心流程风险 | `chat` 事实源优先，`npc_service` 停止不应阻塞发言 |
+| owner 不明确 | 输入无法交付，继续 no-go | 在 handoff contract 标为 `owner_missing`，P3-H 输出 `still_env_blocked` |
+| secret 泄漏 | 安全与合规风险 | evidence 模板只允许脱敏摘要，禁止粘贴 key/token/cookie/password |
+| 文档与当前代码 env 不一致 | 下一次 gate 使用错误字段 | P1-B/P2-E 必须引用 `npc_service/app/settings.py` 当前字段 |
+| 误把输入解锁当成 canary pass | release 风险 | P3-H 只允许 `ready_to_rerun_gate / still_env_blocked` |
+| 过早进入强暂停 | 产品边界风险 | 强暂停仍保留到 C47 后置债，等待真实环境证据和产品确认 |
 
 ## 8. 执行决策点
 
-1. P1-C 若为 `ready`：继续 P1-D/P1-E/P2-F。
-2. P1-C 若为 `env_blocked`：跳到 P2-G 输出缺口 evidence，再进入 P4-I 收口。
-3. P1-D/P1-E/P2-F 若出现真实缺陷：进入 P3-H 最小修复。
-4. P2-G 若为 `pass`：建议进入 Beta 小流量开关策略设计。
-5. P2-G 若为 `fail` 或 `rollback_required`：先修复真实故障，不进入强暂停或新能力开发。
+1. P1-B 若 owner 缺失严重：可以直接进入 P3-H 输出 `still_env_blocked`。
+2. P1-C/P1-D/P2-E/P2-F/P2-G 若全部完成且输入齐备：P3-H 输出 `ready_to_rerun_gate`。
+3. P3-H 若输出 `ready_to_rerun_gate`：下一阶段重新触发 P1-C readiness gate。
+4. P3-H 若输出 `still_env_blocked`：进入 P4-I 收口并继续保留 C47。
 
 ### 模块完成同步历史
 
-1. 2026-05-04：生成 `virtual-judge-npc-beta-real-env-canary-dashboard-closure` 下一阶段开发计划；P0-A 已完成，下一步建议执行 P1-B。
-2. 2026-05-04：执行 P1-B preflight，完成工作区、迁移、配置入口、topic 与外部输入缺口基线；下一步建议执行 P1-C readiness gate。
-3. 2026-05-04：执行 P1-C readiness gate，结论为 `env_blocked`；P1-D/P1-E/P2-F 暂停，下一步建议执行 P2-G release decision。
-4. 2026-05-04：执行 P2-G release decision，结论为 `env_blocked / no-go`；下一步建议执行 P4-I 阶段收口。
+1. 2026-05-04：生成 `virtual-judge-npc-real-env-input-unblock-pack` 下一阶段开发计划；P0-A 已完成，下一步建议执行 P1-B。
+2. 2026-05-04：执行 P1-B `virtual-judge-npc-real-env-input-owner-handoff-contract`，新增 Owner 交付合同；下一步建议执行 P1-C 脱敏 evidence 模板包。
