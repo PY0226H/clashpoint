@@ -297,6 +297,77 @@ pub struct JudgeAssistantAdvisoryOutput {
 }
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RequestDebateAssistantQueryInput {
+    pub intent: String,
+    pub question: String,
+    pub draft: Option<String>,
+    pub trace_id: Option<String>,
+    pub side: Option<String>,
+    pub case_id: Option<u64>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DebateAssistantMembershipStatus {
+    pub required: bool,
+    pub active: bool,
+    pub feature_key: String,
+    pub status: String,
+    pub starts_at: Option<DateTime<Utc>>,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DebateAssistantQuotaStatus {
+    pub scope: String,
+    pub limit: i32,
+    pub used: i32,
+    pub remaining: i32,
+    pub reset_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DebateAssistantStatusOutput {
+    pub session_id: u64,
+    pub agent_kind: String,
+    pub available: bool,
+    pub viewer_role: String,
+    pub viewer_side: Option<String>,
+    pub membership: DebateAssistantMembershipStatus,
+    pub quota: DebateAssistantQuotaStatus,
+    pub intents: Vec<String>,
+    pub boundary_notice: String,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DebateAssistantOutput {
+    pub version: String,
+    pub agent_kind: String,
+    pub session_id: u64,
+    pub case_id: Option<u64>,
+    pub advisory_only: bool,
+    pub status: String,
+    pub status_reason: String,
+    pub accepted: bool,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+    #[serde(default)]
+    pub capability_boundary: Value,
+    #[serde(default)]
+    pub shared_context: Value,
+    #[serde(default)]
+    pub advisory_context: Value,
+    #[serde(default)]
+    pub output: Value,
+    #[serde(default)]
+    pub cache_profile: Value,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetJudgeChallengeOutput {
     pub session_id: u64,

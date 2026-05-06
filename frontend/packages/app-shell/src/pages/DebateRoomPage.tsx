@@ -652,6 +652,7 @@ export function DebateRoomPage() {
     Math.floor(Number(pinSecondsInput) || 60),
   );
   const viewerRole = String(messagesQuery.data?.viewerRole || "participant");
+  const viewerSide = messagesQuery.data?.viewerSide ?? null;
   const isSpectator = viewerRole === "spectator";
   const canSendMessage =
     messagesQuery.data?.canSendMessage ?? viewerRole === "participant";
@@ -971,8 +972,11 @@ export function DebateRoomPage() {
 
       <DebateAssistantPanel
         caseId={assistantCaseId}
+        canSendMessage={canSendMessage}
         onHint={setPageHint}
         sessionId={sessionIdNum}
+        viewerRole={viewerRole}
+        viewerSide={viewerSide}
       />
 
       <section className="echo-lobby-panel">

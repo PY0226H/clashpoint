@@ -162,6 +162,8 @@ pub struct AiJudgeConfig {
     pub assistant_npc_coach_path: String,
     #[serde(default = "default_ai_judge_assistant_room_qa_path")]
     pub assistant_room_qa_path: String,
+    #[serde(default = "default_ai_judge_assistant_debate_assistant_path")]
+    pub assistant_debate_assistant_path: String,
     #[serde(default = "default_ai_judge_assistant_timeout_ms")]
     pub assistant_timeout_ms: u64,
 }
@@ -285,6 +287,7 @@ impl Default for AiJudgeConfig {
             calibration_decisions_timeout_ms: default_ai_judge_calibration_decisions_timeout_ms(),
             assistant_npc_coach_path: default_ai_judge_assistant_npc_coach_path(),
             assistant_room_qa_path: default_ai_judge_assistant_room_qa_path(),
+            assistant_debate_assistant_path: default_ai_judge_assistant_debate_assistant_path(),
             assistant_timeout_ms: default_ai_judge_assistant_timeout_ms(),
         }
     }
@@ -570,6 +573,10 @@ fn default_ai_judge_assistant_npc_coach_path() -> String {
 
 fn default_ai_judge_assistant_room_qa_path() -> String {
     "/internal/judge/apps/room-qa/sessions/{session_id}/answer".to_string()
+}
+
+fn default_ai_judge_assistant_debate_assistant_path() -> String {
+    "/internal/judge/apps/debate-assistant/sessions/{session_id}/query".to_string()
 }
 
 fn default_ai_judge_assistant_timeout_ms() -> u64 {
@@ -907,6 +914,10 @@ mod tests {
         assert_eq!(
             cfg.assistant_room_qa_path,
             "/internal/judge/apps/room-qa/sessions/{session_id}/answer"
+        );
+        assert_eq!(
+            cfg.assistant_debate_assistant_path,
+            "/internal/judge/apps/debate-assistant/sessions/{session_id}/query"
         );
         assert_eq!(cfg.assistant_timeout_ms, 5_000);
     }

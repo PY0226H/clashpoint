@@ -1,68 +1,113 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { AssistantAdvisoryResult } from "./DebateAssistantPanel";
-import type { JudgeAssistantAdvisoryView } from "@echoisle/debate-domain";
+import {
+  DebateAssistantLockState,
+  DebateAssistantResult,
+} from "./DebateAssistantPanel";
+import type {
+  DebateAssistantStatusOutput,
+  DebateAssistantView,
+} from "@echoisle/debate-domain";
 
-describe("AssistantAdvisoryResult", () => {
-  it("renders not_ready as advisory-only UI and not as official verdict", () => {
-    const view: JudgeAssistantAdvisoryView = {
-      state: "not_ready",
-      agentKind: "npc_coach",
-      label: "辅助功能未启用",
-      reasonCode: "agent_not_enabled",
-      advisoryOnly: true,
-      accepted: false,
-      caseId: 42,
-      message: "辅助建议暂未启用，当前不会影响官方裁决。",
-      items: [],
-      contextStage: "final_context_available",
-      contextLabel: "已有最终上下文",
-      workflowStatus: "not_ready",
-      latestDispatchType: "final",
-      receiptSummary: "phase 0 / final 1",
-      updatedAt: null,
-    };
+function assistantStatus(
+  overrides?: Partial<DebateAssistantStatusOutput>,
+): DebateAssistantStatusOutput {
+  return {
+    sessionId: 9,
+    agentKind: "debate_assistant",
+    available: false,
+    viewerRole: "participant",
+    viewerSide: "pro",
+    membership: {
+      required: true,
+      active: false,
+      featureKey: "debate_assistant",
+      status: "absent",
+      startsAt: null,
+      expiresAt: null,
+    },
+    quota: {
+      scope: "session",
+      limit: 20,
+      used: 0,
+      remaining: 20,
+      resetAt: null,
+    },
+    intents: [
+      "room_summary",
+      "opponent_summary",
+      "unanswered_points",
+      "speech_structure",
+      "draft_polish",
+    ],
+    boundaryNotice: "私人辅助，不代表官方裁决；不会自动发送公开发言。",
+    ...overrides,
+  };
+}
 
+describe("DebateAssistantPanel presentational states", () => {
+  it("renders non-member lock without official verdict semantics", () => {
     const html = renderToStaticMarkup(
-      <AssistantAdvisoryResult title="NPC Coach" view={view} />,
+      <DebateAssistantLockState status={assistantStatus()} />,
     );
 
-    expect(html).toContain("辅助功能未启用");
-    expect(html).toContain("辅助建议，不是官方裁决");
-    expect(html).toContain("已有最终上下文");
-    expect(html).toContain("当前不会影响官方裁决");
+    expect(html).toContain("会员专属");
+    expect(html).toContain("开通会员");
+    expect(html).toContain("私人辅助，不代表官方裁决");
+    expect(html).toContain("本场剩余 20/20");
+    expect(html).not.toContain("Winner");
+    expect(html).not.toContain("Score");
+    expect(html).not.toContain("Judge Trace");
+  });
+
+  it("renders ready assistant answer as private guidance lists", () => {
+    const view: DebateAssistantView = {
+      state: "ready",
+      label: "辩论助手已生成建议",
+      reasonCode: "debate_assistant_ready",
+      accepted: true,
+      advisoryOnly: true,
+      caseId: 42,
+      intent: "speech_structure",
+      answerSummary: "下一段可以先承认风险，再提出可执行边界。",
+      keyPoints: ["对方强调注意力风险。", "我方需要补充管理规则。"],
+      suggestedActions: ["用一句话归纳对方担忧。", "提出时间和场景限制。"],
+      contextCaveats: ["仅基于当前公开房间消息。"],
+      boundaryNotice: "私人辅助，不代表官方裁决；不会自动发送公开发言。",
+      sourceUsePolicy: "仅基于当前房间公开内容和用户输入。",
+    };
+
+    const html = renderToStaticMarkup(<DebateAssistantResult view={view} />);
+
+    expect(html).toContain("辩论助手已生成建议");
+    expect(html).toContain("下一段可以先承认风险");
+    expect(html).toContain("行动建议");
+    expect(html).toContain("仅基于当前公开房间消息");
     expect(html).not.toContain("Winner");
     expect(html).not.toContain("Score");
   });
 
-  it("renders deterministic placeholder guidance as advisory-only list", () => {
-    const view: JudgeAssistantAdvisoryView = {
-      state: "ready",
-      agentKind: "room_qa",
-      label: "辅助建议已生成",
-      reasonCode: "assistant_advisory_ready",
+  it("renders quota exhausted as a safe private assistant state", () => {
+    const view: DebateAssistantView = {
+      state: "quota_exhausted",
+      label: "本场助手额度已用完",
+      reasonCode: "debate_assistant_quota_exhausted",
+      accepted: false,
       advisoryOnly: true,
-      accepted: true,
-      caseId: 42,
-      message: "当前上下文阶段：已有阶段上下文。",
-      items: ["当前上下文阶段是什么？", "我还可以补充哪些公开材料？"],
-      contextStage: "phase_context_available",
-      contextLabel: "已有阶段上下文",
-      workflowStatus: "done",
-      latestDispatchType: "phase",
-      receiptSummary: "phase 1 / final 0",
-      updatedAt: null,
+      caseId: null,
+      intent: null,
+      answerSummary: "本场可用次数已经用完。",
+      keyPoints: [],
+      suggestedActions: [],
+      contextCaveats: [],
+      boundaryNotice: "私人辅助，不代表官方裁决；不会自动发送公开发言。",
+      sourceUsePolicy: null,
     };
 
-    const html = renderToStaticMarkup(
-      <AssistantAdvisoryResult title="Room QA" view={view} />,
-    );
+    const html = renderToStaticMarkup(<DebateAssistantResult view={view} />);
 
-    expect(html).toContain("辅助建议已生成");
-    expect(html).toContain("辅助建议，不是官方裁决");
-    expect(html).toContain("当前上下文阶段是什么？");
-    expect(html).toContain("phase 1 / final 0");
-    expect(html).not.toContain("Winner");
-    expect(html).not.toContain("Score");
+    expect(html).toContain("本场助手额度已用完");
+    expect(html).toContain("本场可用次数已经用完");
+    expect(html).toContain("私人辅助，不代表官方裁决");
   });
 });

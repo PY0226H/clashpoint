@@ -291,6 +291,14 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
             post(request_judge_challenge_handler),
         )
         .route(
+            "/sessions/:id/assistant/debate-assistant/status",
+            get(get_debate_assistant_status_handler),
+        )
+        .route(
+            "/sessions/:id/assistant/debate-assistant/query",
+            post(request_debate_assistant_query_handler),
+        )
+        .route(
             "/sessions/:id/assistant/npc-coach/advice",
             post(request_npc_coach_advice_handler),
         )

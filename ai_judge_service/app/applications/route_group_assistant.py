@@ -10,7 +10,7 @@ from ..domain.agents import (
     AGENT_KIND_ROOM_QA,
     AgentExecutionRequest,
 )
-from ..models import NpcCoachAdviceRequest, RoomQaAnswerRequest
+from ..models import DebateAssistantQueryRequest, NpcCoachAdviceRequest, RoomQaAnswerRequest
 from .assistant_agent_routes import (
     build_assistant_agent_response as build_assistant_agent_response_v3,
 )
@@ -19,6 +19,9 @@ from .assistant_agent_routes import (
 )
 from .assistant_agent_routes import (
     build_room_qa_answer_route_payload as build_room_qa_answer_route_payload_v3,
+)
+from .debate_assistant_routes import (
+    build_debate_assistant_query_route_payload as build_debate_assistant_query_route_payload_v1,
 )
 
 AsyncPayloadFn = Callable[..., Awaitable[dict[str, Any]]]
@@ -30,6 +33,7 @@ RequireInternalKeyFn = Callable[[Any, str | None], None]
 
 @dataclass(frozen=True)
 class AssistantRouteHandles:
+    request_debate_assistant_query: AsyncPayloadFn
     request_npc_coach_advice: AsyncPayloadFn
     request_room_qa_answer: AsyncPayloadFn
 
@@ -50,6 +54,22 @@ def register_assistant_routes(
     deps: AssistantRouteDependencies,
 ) -> AssistantRouteHandles:
     runtime = deps.runtime
+
+    @app.post("/internal/judge/apps/debate-assistant/sessions/{session_id}/query")
+    async def request_debate_assistant_query(
+        session_id: int,
+        payload: DebateAssistantQueryRequest,
+        x_ai_internal_key: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        deps.require_internal_key_fn(runtime.settings, x_ai_internal_key)
+        return await deps.run_assistant_agent_route_guard(
+            build_debate_assistant_query_route_payload_v1(
+                session_id=session_id,
+                payload=payload,
+                execute_agent=deps.execute_agent,
+                build_execution_request=AgentExecutionRequest,
+            )
+        )
 
     @app.post("/internal/judge/apps/npc-coach/sessions/{session_id}/advice")
     async def request_npc_coach_advice(
@@ -92,6 +112,7 @@ def register_assistant_routes(
         )
 
     return AssistantRouteHandles(
+        request_debate_assistant_query=request_debate_assistant_query,
         request_npc_coach_advice=request_npc_coach_advice,
         request_room_qa_answer=request_room_qa_answer,
     )

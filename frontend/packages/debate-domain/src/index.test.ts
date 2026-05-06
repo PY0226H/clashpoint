@@ -16,17 +16,22 @@ vi.mock("@echoisle/api-client", () => ({
 
 import {
   DEBATE_NPC_ACTION_CREATED_EVENT,
+  assertDebateAssistantOutput,
   assertJudgeAssistantAdvisoryOutput,
   getOldestDebateMessageId,
   isDebateNpcActionCreatedPayload,
+  requestDebateAssistant,
+  requestDebateAssistantStatus,
   requestNpcCoachAdvice,
   requestRoomQaAnswer,
   mergeDebateMessages,
   normalizeDebateSide,
   normalizeDebateStatusFilter,
+  resolveDebateAssistantView,
   resolveJudgeAssistantAdvisoryView,
   resolveDebateJudgeChallengeView,
   resolveDebateJudgePublicVerificationView,
+  type DebateAssistantOutput,
   type JudgeAssistantAdvisoryOutput,
   type JsonValue,
 } from "./index";
@@ -94,6 +99,104 @@ function advisoryOutput(
       cacheable: false,
       ttlSeconds: 0,
       staleWhileRevalidateSeconds: 0,
+    },
+    ...overrides,
+  };
+}
+
+function debateAssistantTranscriptContext(sessionId = 9): JsonValue {
+  return {
+    version: "assistant_room_transcript_context_v1",
+    sessionId,
+    topic: {
+      title: "是否应开放校园手机使用",
+      description: "围绕学习效率与自主权展开辩论",
+      category: "education",
+      stancePro: "应该开放",
+      stanceCon: "不应开放",
+    },
+    session: {
+      status: "running",
+      scheduledStartAt: null,
+      actualStartAt: "2026-05-06T01:00:00Z",
+      endAt: "2026-05-06T02:00:00Z",
+    },
+    viewer: {
+      userId: 7,
+      role: "participant",
+      side: "pro",
+    },
+    recentMessages: [
+      {
+        messageId: 1,
+        sessionId,
+        userId: 8,
+        side: "con",
+        content: "手机会分散注意力。",
+        createdAt: "2026-05-06T01:03:00Z",
+      },
+    ],
+    messageWindow: {
+      limit: 60,
+      order: "asc",
+      truncated: false,
+      latestMessageId: 1,
+    },
+    redaction: {
+      publicOnly: true,
+      privateFieldsRedacted: true,
+      officialVerdictFieldsRedacted: true,
+      membershipSignalsRedacted: true,
+    },
+  };
+}
+
+function debateAssistantOutput(
+  overrides?: Partial<DebateAssistantOutput>,
+): DebateAssistantOutput {
+  const context = debateAssistantTranscriptContext();
+  return {
+    version: "debate_assistant_contract_v1",
+    agentKind: "debate_assistant",
+    sessionId: 9,
+    caseId: 42,
+    advisoryOnly: true,
+    status: "ok",
+    statusReason: "debate_assistant_ready",
+    accepted: true,
+    errorCode: null,
+    errorMessage: null,
+    capabilityBoundary: {
+      mode: "advisory_only",
+      advisoryOnly: true,
+      officialVerdictAuthority: false,
+      writesVerdictLedger: false,
+      writesJudgeTrace: false,
+      canTriggerOfficialJudgeRoles: false,
+    },
+    sharedContext: context,
+    advisoryContext: {
+      roomTranscriptContext: context,
+      request: {
+        intent: "room_summary",
+      },
+    },
+    output: {
+      accepted: true,
+      intent: "room_summary",
+      answerSummary: "当前争点集中在学习效率与学生自主权的权衡。",
+      keyPoints: ["对方强调注意力风险。", "我方可以补充自主管理条件。"],
+      suggestedActions: ["先承认风险，再提出管理边界。"],
+      contextCaveats: ["仅基于当前公开发言。"],
+      boundaryNotice: "私人辅助，不代表官方裁决；不会自动发送公开发言。",
+      sourceUsePolicy: "仅基于当前房间公开内容和用户输入。",
+    },
+    cacheProfile: {
+      cacheable: false,
+      ttlSeconds: 0,
+      staleWhileRevalidateSeconds: 0,
+      cacheKey: "debate-assistant:session:9",
+      varyBy: ["authorization", "sessionId", "intent"],
     },
     ...overrides,
   };
@@ -526,6 +629,145 @@ describe("debate-domain normalize helpers", () => {
     );
     expect(result.status).toBe("not_ready");
     expect(result.advisoryOnly).toBe(true);
+  });
+
+  it("loads debate assistant status for membership and quota display", async () => {
+    apiClient.get.mockResolvedValue({
+      data: {
+        sessionId: 9,
+        agentKind: "debate_assistant",
+        available: true,
+        viewerRole: "participant",
+        viewerSide: "pro",
+        membership: {
+          required: true,
+          active: true,
+          featureKey: "debate_assistant",
+          status: "active",
+          startsAt: null,
+          expiresAt: null,
+        },
+        quota: {
+          scope: "session",
+          limit: 20,
+          used: 3,
+          remaining: 17,
+          resetAt: null,
+        },
+        intents: [
+          "room_summary",
+          "opponent_summary",
+          "unanswered_points",
+          "speech_structure",
+          "draft_polish",
+        ],
+        boundaryNotice: "私人辅助，不代表官方裁决；不会自动发送公开发言。",
+      },
+    });
+
+    const result = await requestDebateAssistantStatus(9);
+
+    expect(apiClient.get).toHaveBeenCalledWith(
+      "/debate/sessions/9/assistant/debate-assistant/status",
+    );
+    expect(result.available).toBe(true);
+    expect(result.quota.remaining).toBe(17);
+    expect(result.membership.featureKey).toBe("debate_assistant");
+  });
+
+  it("calls debate assistant query with trimmed typed body", async () => {
+    apiClient.post.mockResolvedValue({
+      data: debateAssistantOutput(),
+    });
+
+    const result = await requestDebateAssistant(9, {
+      intent: "draft_polish",
+      question: "  帮我优化这段草稿  ",
+      draft: "  我认为可以开放手机，但需要规则。  ",
+      traceId: " trace-2 ",
+      side: "con",
+      caseId: 42,
+    });
+
+    expect(apiClient.post).toHaveBeenCalledWith(
+      "/debate/sessions/9/assistant/debate-assistant/query",
+      {
+        intent: "draft_polish",
+        question: "帮我优化这段草稿",
+        draft: "我认为可以开放手机，但需要规则。",
+        traceId: "trace-2",
+        side: "con",
+        caseId: 42,
+      },
+    );
+    expect(result.agentKind).toBe("debate_assistant");
+    expect(result.accepted).toBe(true);
+  });
+
+  it("maps debate assistant output into a private assistant view", () => {
+    const view = resolveDebateAssistantView(debateAssistantOutput());
+
+    expect(view.state).toBe("ready");
+    expect(view.label).toBe("辩论助手已生成建议");
+    expect(view.answerSummary).toBe(
+      "当前争点集中在学习效率与学生自主权的权衡。",
+    );
+    expect(view.keyPoints).toEqual([
+      "对方强调注意力风险。",
+      "我方可以补充自主管理条件。",
+    ]);
+    expect(view.boundaryNotice).toContain("不代表官方裁决");
+  });
+
+  it("fails closed when debate assistant output includes official or private fields", async () => {
+    apiClient.post.mockResolvedValue({
+      data: debateAssistantOutput({
+        advisoryContext: {
+          roomTranscriptContext: debateAssistantTranscriptContext(),
+          winner: "pro",
+          walletBalance: 100,
+        } satisfies JsonValue,
+      }),
+    });
+
+    await expect(
+      requestDebateAssistant(9, {
+        intent: "room_summary",
+        question: "总结当前争点",
+      }),
+    ).rejects.toThrow("forbidden official or private fields");
+    expect(apiClient.post).toHaveBeenCalledWith(
+      "/debate/sessions/9/assistant/debate-assistant/query",
+      {
+        intent: "room_summary",
+        question: "总结当前争点",
+      },
+    );
+  });
+
+  it("allows user-safe proxy error output without transcript context", () => {
+    const output = debateAssistantOutput({
+      status: "proxy_error",
+      statusReason: "debate_assistant_proxy_failed",
+      accepted: false,
+      errorCode: "debate_assistant_proxy_failed",
+      errorMessage: "debate assistant request failed",
+      sharedContext: {},
+      advisoryContext: {},
+      output: {
+        accepted: false,
+        intent: null,
+        answerSummary: null,
+        keyPoints: [],
+        suggestedActions: [],
+        contextCaveats: ["辩论助手暂不可用，请稍后重试。"],
+        boundaryNotice: "私人辅助，不代表官方裁决；不会自动发送公开发言。",
+        sourceUsePolicy: "未生成助手回答。",
+      },
+    });
+
+    expect(assertDebateAssistantOutput(output).status).toBe("proxy_error");
+    expect(resolveDebateAssistantView(output).state).toBe("proxy_error");
   });
 
   it("maps not_ready advisory response into a user-safe read model", () => {

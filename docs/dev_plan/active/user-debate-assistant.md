@@ -1,9 +1,9 @@
 # 当前开发计划：用户辩论助手 MVP
 
-更新时间：2026-05-06  
-任务类型：dev / new feature  
-当前状态：待执行  
-活动 slot：`user-debate-assistant`  
+更新时间：2026-05-06
+任务类型：dev / new feature
+当前状态：执行中
+活动 slot：`user-debate-assistant`
 
 ---
 
@@ -613,12 +613,26 @@ pnpm e2e:smoke:desktop
 
 | 切片 | 状态 | 说明 |
 |---|---|---|
-| S0 系统设计确认 | 待执行 | 下一步优先做 |
-| S1 跨层合同与命名硬切 | 待执行 | 依赖 S0 |
-| S2 会员权益与额度 gate | 待执行 | 依赖 S0 |
-| S3 Transcript Context | 待执行 | 依赖 S0 |
-| S4 chat proxy 与二次合同校验 | 待执行 | 依赖 S1 / S3 |
-| S5 AI service LLM executor | 待执行 | 依赖 S1 / S3 |
-| S6 前端产品化助手面板 | 待执行 | 依赖 S1 / S2 |
-| S7 端到端闭环与 smoke | 待执行 | 依赖 S2-S6 |
-| S8 清理、文档与代码地图 | 待执行 | 依赖 S7 |
+| S0 系统设计确认 | 已完成 | 已新增 `docs/module_design/用户辩论助手/用户辩论助手_系统设计.md`；`pre-module-prd-goal-guard` 已运行，并手动回读用户辩论助手 PRD |
+| S1 跨层合同与命名硬切 | 已完成 | 已新增 `debate_assistant` 用户侧 route / DTO / OpenAPI / 前端 SDK / AI internal route |
+| S2 会员权益与额度 gate | 已完成 | 已新增最小 `user_entitlements` 与 `debate_assistant_session_usage`，query 成功合同通过后扣减 |
+| S3 Transcript Context | 已完成 | chat 构建最近 60 条公开消息上下文，带隐私/正式裁决 redaction 标记 |
+| S4 chat proxy 与二次合同校验 | 已完成 | chat 代理 AI service，校验合同、agent kind、context、forbidden fields，AI 失败/合同失败不扣额度 |
+| S5 AI service LLM executor | 已完成 | `llm` mode 下启用 `debate_assistant` LLM executor；未配置时返回 `not_ready`，不生成 deterministic 伪回答 |
+| S6 前端产品化助手面板 | 已完成 | Debate Room 面板已切为单一“辩论助手”，包含会员锁定态、额度、快捷问题、草稿优化和私有回复展示 |
+| S7 端到端闭环与 smoke | 待执行 | 需要启动 chat / ai_judge_service 与会员 fixture 做真实运行态 smoke |
+| S8 清理、文档与代码地图 | 进行中 | 已更新架构代码地图；旧 `npc_coach` / `room_qa` 历史测试资产暂保留 |
+
+### 12.1 本轮已运行验证
+
+1. `cd chat && cargo test -p chat-server debate_assistant -- --nocapture`
+2. `cd chat && cargo fmt --all`
+3. `cd chat && cargo check -p chat-server`
+4. `cd ai_judge_service && /Users/panyihang/Documents/EchoIsle/ai_judge_service/.venv/bin/python -m unittest tests.test_agent_runtime tests.test_app_factory_assistant_routes -v`
+5. `cd frontend && pnpm --filter @echoisle/debate-domain test`
+6. `cd frontend && pnpm --filter @echoisle/app-shell test`
+7. `cd frontend && pnpm --filter @echoisle/debate-domain typecheck`
+8. `cd frontend && pnpm --filter @echoisle/app-shell typecheck`
+9. `cd frontend && pnpm --filter @echoisle/debate-domain lint`
+10. `cd frontend && pnpm --filter @echoisle/app-shell lint`
+11. `git diff --check`

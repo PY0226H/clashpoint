@@ -96,6 +96,33 @@ class RoomQaAnswerRequest(BaseModel):
     )
 
 
+class DebateAssistantQueryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    trace_id: str = Field(min_length=1, max_length=160)
+    intent: Literal[
+        "room_summary",
+        "opponent_summary",
+        "unanswered_points",
+        "speech_structure",
+        "draft_polish",
+    ]
+    question: str = Field(min_length=1, max_length=2000)
+    draft: str | None = Field(default=None, max_length=4000)
+    side: PhaseSide
+    case_id: int | None = Field(
+        default=None,
+        validation_alias=AliasChoices("case_id", "caseId"),
+        serialization_alias="caseId",
+    )
+    room_transcript_context: dict[str, Any] = Field(
+        validation_alias=AliasChoices(
+            "room_transcript_context",
+            "roomTranscriptContext",
+        ),
+        serialization_alias="roomTranscriptContext",
+    )
+
+
 class GroundedSummaryPayload(BaseModel):
     text: str
     message_ids: list[int] = []

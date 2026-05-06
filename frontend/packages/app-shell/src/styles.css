@@ -215,6 +215,22 @@
   gap: 12px;
 }
 
+.echo-assistant-grid.is-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.echo-assistant-header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.echo-assistant-header h3 {
+  margin-bottom: 4px;
+}
+
 .echo-assistant-tool {
   display: flex;
   flex-direction: column;
@@ -223,8 +239,14 @@
 }
 
 .echo-assistant-tool h4,
-.echo-assistant-result h4 {
+.echo-assistant-result h4,
+.echo-assistant-result h5 {
   margin: 0;
+}
+
+.echo-assistant-result h5 {
+  font-size: 0.82rem;
+  color: var(--echo-muted);
 }
 
 .echo-assistant-row {
@@ -266,6 +288,18 @@
 .echo-assistant-result p {
   margin: 0;
   white-space: pre-wrap;
+}
+
+.echo-assistant-textarea {
+  min-height: 88px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.echo-assistant-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .echo-npc-panel {

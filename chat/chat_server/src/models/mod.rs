@@ -29,8 +29,10 @@ pub use debate::{
 };
 pub use judge::{
     CreateJudgeCalibrationDecisionOpsInput, CreateJudgeCalibrationDecisionOpsOutput,
-    DrawVoteDetail, ExecuteJudgeReplayOpsInput, ExecuteJudgeReplayOpsOutput, GetDrawVoteOutput,
-    GetJudgeChallengeOutput, GetJudgeChallengeQuery, GetJudgeFinalDispatchFailureStatsOutput,
+    DebateAssistantMembershipStatus, DebateAssistantOutput, DebateAssistantQuotaStatus,
+    DebateAssistantStatusOutput, DrawVoteDetail, ExecuteJudgeReplayOpsInput,
+    ExecuteJudgeReplayOpsOutput, GetDrawVoteOutput, GetJudgeChallengeOutput,
+    GetJudgeChallengeQuery, GetJudgeFinalDispatchFailureStatsOutput,
     GetJudgeFinalDispatchFailureStatsQuery, GetJudgePublicVerifyOutput, GetJudgePublicVerifyQuery,
     GetJudgeReplayPreviewOpsOutput, GetJudgeReplayPreviewOpsQuery, GetJudgeReportFinalOutput,
     GetJudgeReportOutput, GetJudgeReportQuery, GetJudgeRuntimeReadinessOpsOutput,
@@ -44,11 +46,11 @@ pub use judge::{
     JudgeTraceReplayOpsItem, ListJudgeChallengeOpsQueueOutput, ListJudgeChallengeOpsQueueQuery,
     ListJudgeReplayActionsOpsOutput, ListJudgeReplayActionsOpsQuery, ListJudgeReviewOpsOutput,
     ListJudgeReviewOpsQuery, ListJudgeTraceReplayOpsOutput, ListJudgeTraceReplayOpsQuery,
-    RequestJudgeChallengeInput, RequestJudgeJobInput, RequestJudgeJobOutput,
-    RequestNpcCoachAdviceInput, RequestRoomQaAnswerInput, SubmitDrawVoteInput,
-    SubmitDrawVoteOutput, SubmitJudgeFailedCallbackInput, SubmitJudgeFailedCallbackOutput,
-    SubmitJudgeFinalReportInput, SubmitJudgeFinalReportOutput, SubmitJudgePhaseReportInput,
-    SubmitJudgePhaseReportOutput,
+    RequestDebateAssistantQueryInput, RequestJudgeChallengeInput, RequestJudgeJobInput,
+    RequestJudgeJobOutput, RequestNpcCoachAdviceInput, RequestRoomQaAnswerInput,
+    SubmitDrawVoteInput, SubmitDrawVoteOutput, SubmitJudgeFailedCallbackInput,
+    SubmitJudgeFailedCallbackOutput, SubmitJudgeFinalReportInput, SubmitJudgeFinalReportOutput,
+    SubmitJudgePhaseReportInput, SubmitJudgePhaseReportOutput,
 };
 pub(crate) use judge_dispatch::AiJudgeDispatchMetrics;
 pub use judge_dispatch::GetJudgeDispatchMetricsOutput;

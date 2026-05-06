@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 mod assistant_advisory_proxy;
 mod calibration_decision_ops_proxy;
 mod challenge_ops_projection;
+mod debate_assistant;
 mod draw_vote;
 mod helpers;
 mod phase_final_report_submit;

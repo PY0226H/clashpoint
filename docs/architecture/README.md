@@ -1,7 +1,7 @@
 # EchoIsle Architecture Map
 
 更新时间：2026-05-06
-状态：当前主线轻量代码地图（AI Judge 当前有效主线为 Official Verdict Plane；虚拟裁判 NPC 下一阶段正在开发；NPC Coach / Room QA 已暂停）
+状态：当前主线轻量代码地图（AI Judge 当前有效主线为 Official Verdict Plane；虚拟裁判 NPC 与用户辩论助手为房间侧独立能力；NPC Coach / Room QA 已暂停）
 
 ---
 
@@ -110,6 +110,28 @@
 22. [ops-domain index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/ops-domain/src/index.ts)
 23. [虚拟裁判NPC_开发计划.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/虚拟裁判NPC_开发计划.md)
 
+### 3.2.2 用户辩论助手（会员私人辅助）
+
+用户辩论助手是 Debate Room 内的会员私人辅助能力，不是公开 NPC，不写入房间消息流，也不代表官方 AI 裁判。当前 MVP 主语义为 `debate_assistant`：chat 负责参赛权限、会员 entitlement、每场 quota、公开 transcript context 和二次合同校验；`ai_judge_service` 负责 `debate_assistant` LLM executor；前端只展示 status、锁定态、快捷问题、草稿优化与私有回复。
+
+优先看：
+
+1. [DebateAssistantPanel.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/components/DebateAssistantPanel.tsx)
+2. [DebateRoomPage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/DebateRoomPage.tsx)
+3. [debate-domain index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/debate-domain/src/index.ts)
+4. [debate_judge.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/debate_judge.rs)
+5. [judge/debate_assistant.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/judge/debate_assistant.rs)
+6. [judge/types.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/judge/types.rs)
+7. [lib.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/lib.rs)
+8. [openapi.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/openapi.rs)
+9. [debate assistant migration](/Users/panyihang/Documents/EchoIsle/chat/migrations/20260506100000_debate_assistant_entitlement_usage.sql)
+10. [route_group_assistant.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_assistant.py)
+11. [debate_assistant_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/debate_assistant_routes.py)
+12. [agent_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/agent_runtime.py)
+13. [openai_judge_client.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/openai_judge_client.py)
+14. [用户辩论助手_系统设计.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/用户辩论助手/用户辩论助手_系统设计.md)
+15. [用户辩论助手 MVP 计划](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/active/user-debate-assistant.md)
+
 ### 3.3 AI 裁判 / 报告 / 申诉 / 平局投票
 
 当前有效主线是官方 `Judge App` / `Official Verdict Plane`。查 AI 裁判、报告、公验、challenge、复核或平局投票时，优先看下面这些入口。
@@ -142,14 +164,13 @@ AI advisory / NPC Coach / Room QA 当前是暂停历史资产：
 2. [request_report_query.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/judge/request_report_query.rs)
 3. [assistant_advisory_proxy.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/judge/assistant_advisory_proxy.rs)
 4. [debate-domain index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/debate-domain/src/index.ts)
-5. [DebateAssistantPanel.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/components/DebateAssistantPanel.tsx)
-6. [route_group_assistant.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_assistant.py)
-7. [assistant_agent_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/assistant_agent_routes.py)
-8. [assistant_advisory_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/assistant_advisory_contract.py)
-9. [assistant_advisory_prompt.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/assistant_advisory_prompt.py)
-10. [assistant_advisory_output.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/assistant_advisory_output.py)
-11. [bootstrap_ops_panel_replay_payload_helpers.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/bootstrap_ops_panel_replay_payload_helpers.py)
-12. [agent_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/agent_runtime.py)
+5. [route_group_assistant.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_assistant.py)
+6. [assistant_agent_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/assistant_agent_routes.py)
+7. [assistant_advisory_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/assistant_advisory_contract.py)
+8. [assistant_advisory_prompt.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/assistant_advisory_prompt.py)
+9. [assistant_advisory_output.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/assistant_advisory_output.py)
+10. [bootstrap_ops_panel_replay_payload_helpers.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/bootstrap_ops_panel_replay_payload_helpers.py)
+11. [agent_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/agent_runtime.py)
 
 ### 3.4 AI Ops / Registry / Trust / Fairness / Review / Replay
 

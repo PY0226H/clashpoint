@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from app.applications import build_agent_runtime
 from app.domain.agents import (
+    AGENT_KIND_DEBATE_ASSISTANT,
     AGENT_KIND_JUDGE,
     AGENT_KIND_NPC_COACH,
     AGENT_KIND_ROOM_QA,
@@ -21,6 +23,7 @@ from app.domain.agents import (
 from app.runtime_policy import PROVIDER_OPENAI
 from app.settings import (
     ASSISTANT_ADVISORY_EXECUTOR_MODE_DISABLED,
+    ASSISTANT_ADVISORY_EXECUTOR_MODE_LLM,
     ASSISTANT_ADVISORY_EXECUTOR_MODE_LLM_CANARY,
 )
 
@@ -31,8 +34,17 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         profiles = runtime.list_profiles()
         kinds = [row.kind for row in profiles]
-        self.assertEqual(kinds, [AGENT_KIND_JUDGE, AGENT_KIND_NPC_COACH, AGENT_KIND_ROOM_QA])
+        self.assertEqual(
+            kinds,
+            [
+                AGENT_KIND_DEBATE_ASSISTANT,
+                AGENT_KIND_JUDGE,
+                AGENT_KIND_NPC_COACH,
+                AGENT_KIND_ROOM_QA,
+            ],
+        )
         self.assertTrue(runtime.get_profile(AGENT_KIND_JUDGE).enabled)  # type: ignore[union-attr]
+        self.assertFalse(runtime.get_profile(AGENT_KIND_DEBATE_ASSISTANT).enabled)  # type: ignore[union-attr]
         self.assertFalse(runtime.get_profile(AGENT_KIND_NPC_COACH).enabled)  # type: ignore[union-attr]
         self.assertFalse(runtime.get_profile(AGENT_KIND_ROOM_QA).enabled)  # type: ignore[union-attr]
         self.assertIn(
@@ -203,6 +215,87 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.error_code, "assistant_executor_not_configured")
         self.assertEqual(result.output.get("executorMode"), "llm_canary")
         self.assertIn("LLM gateway executor", result.error_message or "")
+
+    async def test_execute_should_enable_debate_assistant_llm_profile_without_legacy_agents(
+        self,
+    ) -> None:
+        runtime = build_agent_runtime(
+            settings=SimpleNamespace(
+                openai_timeout_secs=25.0,
+                provider=PROVIDER_OPENAI,
+                openai_api_key="sk-test",
+                openai_base_url="https://api.openai.com/v1",
+                assistant_openai_api_key="",
+                assistant_openai_model="gpt-assistant",
+                assistant_timeout_seconds=6.0,
+                assistant_max_retries=1,
+                assistant_daily_cost_budget_cents=1000,
+                assistant_advisory_executor_mode=ASSISTANT_ADVISORY_EXECUTOR_MODE_LLM,
+            )
+        )
+
+        debate_profile = runtime.get_profile(AGENT_KIND_DEBATE_ASSISTANT)
+        npc_profile = runtime.get_profile(AGENT_KIND_NPC_COACH)
+        self.assertTrue(debate_profile.enabled)  # type: ignore[union-attr]
+        self.assertEqual(debate_profile.timeout_ms, 6000)  # type: ignore[union-attr]
+        self.assertIn("llm", debate_profile.tags)  # type: ignore[union-attr]
+        self.assertIn("executor_configured", debate_profile.tags)  # type: ignore[union-attr]
+        self.assertFalse(npc_profile.enabled)  # type: ignore[union-attr]
+
+    async def test_execute_debate_assistant_llm_should_call_json_gateway(self) -> None:
+        runtime = build_agent_runtime(
+            settings=SimpleNamespace(
+                openai_timeout_secs=25.0,
+                provider=PROVIDER_OPENAI,
+                openai_api_key="sk-test",
+                openai_base_url="https://api.openai.com/v1",
+                assistant_openai_api_key="",
+                assistant_openai_model="gpt-assistant",
+                assistant_timeout_seconds=6.0,
+                assistant_max_retries=1,
+                assistant_daily_cost_budget_cents=1000,
+                assistant_advisory_executor_mode=ASSISTANT_ADVISORY_EXECUTOR_MODE_LLM,
+            )
+        )
+        fake_output = {
+            "accepted": True,
+            "intent": "room_summary",
+            "answerSummary": "双方围绕证据适用范围展开争论。",
+            "keyPoints": ["正方强调机制收益"],
+            "suggestedActions": ["先回应反方对证据范围的追问"],
+            "contextCaveats": ["仅基于当前公开消息窗口"],
+            "boundaryNotice": "正式结果以赛后官方裁决为准。",
+            "sourceUsePolicy": "仅基于当前房间公开内容和用户输入。",
+        }
+
+        with patch(
+            "app.applications.agent_runtime.call_openai_json",
+            new=AsyncMock(return_value=fake_output),
+        ) as call_json:
+            result = await runtime.execute(
+                AgentExecutionRequest(
+                    kind=AGENT_KIND_DEBATE_ASSISTANT,
+                    input_payload={
+                        "sessionId": 22,
+                        "intent": "room_summary",
+                        "question": "现在双方主要争点是什么？",
+                        "draft": None,
+                        "side": "pro",
+                        "roomTranscriptContext": {
+                            "version": "assistant_room_transcript_context_v1",
+                            "sessionId": 22,
+                            "recentMessages": [],
+                        },
+                    },
+                    trace_id="trace-debate-assistant-llm",
+                    session_id=22,
+                )
+            )
+
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(result.output, fake_output)
+        self.assertIsNone(result.error_code)
+        self.assertEqual(call_json.await_count, 1)
 
     async def test_execute_should_enable_judge_courtroom_runtime(self) -> None:
         runtime = build_agent_runtime(settings=SimpleNamespace(openai_timeout_secs=25.0))

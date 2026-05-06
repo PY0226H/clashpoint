@@ -4,7 +4,8 @@ use crate::{
         release_idempotency_best_effort, request_idempotency_key_from_headers,
         request_rate_limit_ip_key_from_headers, try_acquire_idempotency_or_fail_open,
     },
-    AppError, AppState, RateLimitDecision, RequestJudgeJobInput, SubmitDrawVoteInput,
+    AppError, AppState, RateLimitDecision, RequestDebateAssistantQueryInput, RequestJudgeJobInput,
+    SubmitDrawVoteInput,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -38,6 +39,11 @@ const JUDGE_ASSISTANT_ADVISORY_IP_RATE_LIMIT_PER_WINDOW: u64 = 60;
 const JUDGE_ASSISTANT_ADVISORY_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 const JUDGE_ASSISTANT_ADVISORY_LIMITER_SCOPE: &str = "judge_assistant_advisory";
 const JUDGE_ASSISTANT_ADVISORY_LIMITER_KEY_PREFIX: &str = "judge_assistant";
+const DEBATE_ASSISTANT_USER_RATE_LIMIT_PER_WINDOW: u64 = 20;
+const DEBATE_ASSISTANT_IP_RATE_LIMIT_PER_WINDOW: u64 = 60;
+const DEBATE_ASSISTANT_RATE_LIMIT_WINDOW_SECS: u64 = 60;
+const DEBATE_ASSISTANT_LIMITER_SCOPE: &str = "debate_assistant";
+const DEBATE_ASSISTANT_LIMITER_KEY_PREFIX: &str = "debate_assistant";
 
 const JUDGE_REQUEST_CODE_IDEMPOTENCY_KEY_INVALID: &str = "judge_request_idempotency_key_invalid";
 const JUDGE_REQUEST_CODE_IDEMPOTENCY_KEY_TOO_LONG: &str = "judge_request_idempotency_key_too_long";
@@ -46,6 +52,10 @@ const JUDGE_REPORT_READ_FORBIDDEN: &str = "judge_report_read_forbidden";
 const JUDGE_CHALLENGE_REQUEST_FORBIDDEN: &str = "judge_challenge_request_forbidden";
 const JUDGE_ASSISTANT_ADVISORY_FORBIDDEN: &str = "judge_assistant_advisory_forbidden";
 const JUDGE_ASSISTANT_ADVISORY_CASE_MISMATCH: &str = "judge_assistant_advisory_case_mismatch";
+const DEBATE_ASSISTANT_FORBIDDEN: &str = "debate_assistant_forbidden";
+const DEBATE_ASSISTANT_MEMBERSHIP_REQUIRED: &str = "debate_assistant_membership_required";
+const DEBATE_ASSISTANT_QUOTA_EXHAUSTED: &str = "debate_assistant_quota_exhausted";
+const DEBATE_ASSISTANT_CASE_MISMATCH: &str = "debate_assistant_case_mismatch";
 
 #[derive(Debug, Default)]
 struct JudgeReportReadMetrics {
@@ -293,6 +303,61 @@ async fn enforce_judge_assistant_advisory_rate_limit(
             return Ok(AssistantAdvisoryRateLimitOutcome::Limited(
                 rate_limit_exceeded_response(
                     JUDGE_ASSISTANT_ADVISORY_LIMITER_SCOPE,
+                    build_rate_limit_headers(&ip_decision)?,
+                ),
+            ));
+        }
+        effective_decision = merge_rate_limit_decision(&effective_decision, &ip_decision);
+    }
+
+    Ok(AssistantAdvisoryRateLimitOutcome::Allowed(
+        build_rate_limit_headers(&effective_decision)?,
+    ))
+}
+
+async fn enforce_debate_assistant_rate_limit(
+    state: &AppState,
+    headers: &HeaderMap,
+    user: &User,
+    session_id: u64,
+) -> Result<AssistantAdvisoryRateLimitOutcome, AppError> {
+    let user_limiter_key = format!(
+        "{DEBATE_ASSISTANT_LIMITER_KEY_PREFIX}:user:{}:session:{}",
+        user.id, session_id
+    );
+    let user_decision = enforce_rate_limit(
+        state,
+        DEBATE_ASSISTANT_LIMITER_SCOPE,
+        &user_limiter_key,
+        DEBATE_ASSISTANT_USER_RATE_LIMIT_PER_WINDOW,
+        DEBATE_ASSISTANT_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    if !user_decision.allowed {
+        return Ok(AssistantAdvisoryRateLimitOutcome::Limited(
+            rate_limit_exceeded_response(
+                DEBATE_ASSISTANT_LIMITER_SCOPE,
+                build_rate_limit_headers(&user_decision)?,
+            ),
+        ));
+    }
+
+    let mut effective_decision = user_decision;
+    if let Some(ip_hash) = request_rate_limit_ip_key_from_headers(headers) {
+        let ip_limiter_key =
+            format!("{DEBATE_ASSISTANT_LIMITER_KEY_PREFIX}:ip:{ip_hash}:session:{session_id}");
+        let ip_decision = enforce_rate_limit(
+            state,
+            DEBATE_ASSISTANT_LIMITER_SCOPE,
+            &ip_limiter_key,
+            DEBATE_ASSISTANT_IP_RATE_LIMIT_PER_WINDOW,
+            DEBATE_ASSISTANT_RATE_LIMIT_WINDOW_SECS,
+        )
+        .await;
+        if !ip_decision.allowed {
+            return Ok(AssistantAdvisoryRateLimitOutcome::Limited(
+                rate_limit_exceeded_response(
+                    DEBATE_ASSISTANT_LIMITER_SCOPE,
                     build_rate_limit_headers(&ip_decision)?,
                 ),
             ));
@@ -1417,6 +1482,125 @@ pub(crate) async fn request_judge_challenge_handler(
         dispatch_type = ret.dispatch_type,
         latency_ms = started_at.elapsed().as_millis() as u64,
         "judge challenge requested"
+    );
+    Ok((StatusCode::OK, rate_headers, Json(ret)).into_response())
+}
+
+/// Get private user debate assistant availability for a participant in a debate session.
+#[utoipa::path(
+    get,
+    path = "/api/debate/sessions/{id}/assistant/debate-assistant/status",
+    params(
+        ("id" = u64, Path, description = "Debate session id")
+    ),
+    responses(
+        (status = 200, description = "Debate assistant status", body = crate::DebateAssistantStatusOutput),
+        (status = 401, description = "Unauthorized", body = crate::ErrorOutput),
+        (status = 403, description = "Phone bind required", body = crate::ErrorOutput),
+        (status = 404, description = "Debate session not found", body = crate::ErrorOutput),
+        (status = 409, description = "Request conflict", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
+    ),
+    security(
+        ("token" = [])
+    )
+)]
+pub(crate) async fn get_debate_assistant_status_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+) -> Result<impl IntoResponse, AppError> {
+    let started_at = Instant::now();
+    let ret = match state.get_debate_assistant_status(id, &user).await {
+        Ok(v) => v,
+        Err(AppError::DebateConflict(code)) if code == DEBATE_ASSISTANT_FORBIDDEN => {
+            return Ok((
+                StatusCode::CONFLICT,
+                Json(crate::ErrorOutput::new(code.as_str())),
+            )
+                .into_response());
+        }
+        Err(err) => return Err(err),
+    };
+    tracing::info!(
+        user_id = user.id,
+        session_id = id,
+        available = ret.available,
+        latency_ms = started_at.elapsed().as_millis() as u64,
+        "debate assistant status requested"
+    );
+    Ok((StatusCode::OK, Json(ret)).into_response())
+}
+
+/// Request private user debate assistant output for a participant in a debate session.
+#[utoipa::path(
+    post,
+    path = "/api/debate/sessions/{id}/assistant/debate-assistant/query",
+    params(
+        ("id" = u64, Path, description = "Debate session id")
+    ),
+    request_body = crate::RequestDebateAssistantQueryInput,
+    responses(
+        (status = 200, description = "Debate assistant result", body = crate::DebateAssistantOutput),
+        (status = 400, description = "Invalid request", body = crate::ErrorOutput),
+        (status = 401, description = "Unauthorized", body = crate::ErrorOutput),
+        (status = 403, description = "Phone bind required", body = crate::ErrorOutput),
+        (status = 404, description = "Debate session not found", body = crate::ErrorOutput),
+        (status = 409, description = "Request conflict", body = crate::ErrorOutput),
+        (status = 429, description = "Rate limit exceeded", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
+    ),
+    security(
+        ("token" = [])
+    )
+)]
+pub(crate) async fn request_debate_assistant_query_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+    headers: HeaderMap,
+    Json(input): Json<RequestDebateAssistantQueryInput>,
+) -> Result<impl IntoResponse, AppError> {
+    let started_at = Instant::now();
+    let rate_headers =
+        match enforce_debate_assistant_rate_limit(&state, &headers, &user, id).await? {
+            AssistantAdvisoryRateLimitOutcome::Allowed(headers) => headers,
+            AssistantAdvisoryRateLimitOutcome::Limited(response) => return Ok(response),
+        };
+
+    let ret = match state.request_debate_assistant_query(id, &user, input).await {
+        Ok(v) => v,
+        Err(AppError::DebateConflict(code))
+            if code == DEBATE_ASSISTANT_FORBIDDEN
+                || code == DEBATE_ASSISTANT_MEMBERSHIP_REQUIRED
+                || code == DEBATE_ASSISTANT_QUOTA_EXHAUSTED
+                || code == DEBATE_ASSISTANT_CASE_MISMATCH =>
+        {
+            return Ok((
+                StatusCode::CONFLICT,
+                Json(crate::ErrorOutput::new(code.as_str())),
+            )
+                .into_response());
+        }
+        Err(err) => {
+            tracing::warn!(
+                user_id = user.id,
+                session_id = id,
+                latency_ms = started_at.elapsed().as_millis() as u64,
+                err = %err,
+                "debate assistant query failed"
+            );
+            return Err(err);
+        }
+    };
+
+    tracing::info!(
+        user_id = user.id,
+        session_id = id,
+        status = ret.status,
+        status_reason = ret.status_reason,
+        latency_ms = started_at.elapsed().as_millis() as u64,
+        "debate assistant query requested"
     );
     Ok((StatusCode::OK, rate_headers, Json(ret)).into_response())
 }

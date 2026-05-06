@@ -2,6 +2,7 @@
 
 from .models import (
     AGENT_KIND_JUDGE,
+    AGENT_KIND_DEBATE_ASSISTANT,
     AGENT_KIND_NPC_COACH,
     AGENT_KIND_ROOM_QA,
     JUDGE_COURTROOM_ROLE_ORDER,
@@ -23,6 +24,7 @@ from .ports import AgentExecutorPort, AgentRegistryPort
 
 __all__ = [
     "AGENT_KIND_JUDGE",
+    "AGENT_KIND_DEBATE_ASSISTANT",
     "AGENT_KIND_NPC_COACH",
     "AGENT_KIND_ROOM_QA",
     "ROLE_CLERK",

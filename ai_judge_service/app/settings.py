@@ -55,10 +55,12 @@ VALID_ARTIFACT_STORE_PROVIDERS = {
 ASSISTANT_ADVISORY_EXECUTOR_MODE_DISABLED = "disabled"
 ASSISTANT_ADVISORY_EXECUTOR_MODE_PLACEHOLDER = "placeholder"
 ASSISTANT_ADVISORY_EXECUTOR_MODE_LLM_CANARY = "llm_canary"
+ASSISTANT_ADVISORY_EXECUTOR_MODE_LLM = "llm"
 VALID_ASSISTANT_ADVISORY_EXECUTOR_MODES = {
     ASSISTANT_ADVISORY_EXECUTOR_MODE_DISABLED,
     ASSISTANT_ADVISORY_EXECUTOR_MODE_PLACEHOLDER,
     ASSISTANT_ADVISORY_EXECUTOR_MODE_LLM_CANARY,
+    ASSISTANT_ADVISORY_EXECUTOR_MODE_LLM,
 }
 
 
@@ -94,7 +96,7 @@ def normalize_assistant_advisory_executor_mode(
     token = str(value or "").strip().lower().replace("-", "_")
     if not token:
         # P42 的旧开关只保留为本地 deterministic placeholder 入口；
-        # 真实 LLM executor 必须显式使用 llm_canary mode。
+        # 用户辩论助手真实回答必须显式使用 llm mode。
         return (
             ASSISTANT_ADVISORY_EXECUTOR_MODE_PLACEHOLDER
             if legacy_placeholder_enabled
@@ -104,6 +106,8 @@ def normalize_assistant_advisory_executor_mode(
         return ASSISTANT_ADVISORY_EXECUTOR_MODE_DISABLED
     if token in {"deterministic_placeholder", "local_placeholder"}:
         return ASSISTANT_ADVISORY_EXECUTOR_MODE_PLACEHOLDER
+    if token in {"real_llm", "llm_executor", "assistant_llm"}:
+        return ASSISTANT_ADVISORY_EXECUTOR_MODE_LLM
     return token
 
 
@@ -641,26 +645,26 @@ def validate_for_runtime_env(settings: Settings, runtime_env: str | None) -> Non
                 "AI_JUDGE_ASSISTANT_ADVISORY_EXECUTOR_MODE=placeholder is forbidden "
                 "when runtime env is production"
             )
-        if (
-            settings.assistant_advisory_executor_mode
-            == ASSISTANT_ADVISORY_EXECUTOR_MODE_LLM_CANARY
-        ):
+        if settings.assistant_advisory_executor_mode in {
+            ASSISTANT_ADVISORY_EXECUTOR_MODE_LLM_CANARY,
+            ASSISTANT_ADVISORY_EXECUTOR_MODE_LLM,
+        }:
             assistant_key = settings.assistant_openai_api_key or settings.openai_api_key
             if settings.provider != PROVIDER_OPENAI:
                 raise ValueError(
-                    "AI_JUDGE_ASSISTANT_ADVISORY_EXECUTOR_MODE=llm_canary requires "
+                    "AI_JUDGE_ASSISTANT_ADVISORY_EXECUTOR_MODE=llm/llm_canary requires "
                     "AI_JUDGE_PROVIDER=openai when runtime env is production"
                 )
             if not assistant_key.strip():
                 raise ValueError(
-                    "AI_JUDGE_ASSISTANT_ADVISORY_EXECUTOR_MODE=llm_canary requires "
+                    "AI_JUDGE_ASSISTANT_ADVISORY_EXECUTOR_MODE=llm/llm_canary requires "
                     "AI_JUDGE_ASSISTANT_OPENAI_API_KEY or OPENAI_API_KEY when runtime env "
                     "is production"
                 )
             if settings.assistant_daily_cost_budget_cents <= 0:
                 raise ValueError(
                     "AI_JUDGE_ASSISTANT_DAILY_COST_BUDGET_CENTS must be > 0 when "
-                    "AI_JUDGE_ASSISTANT_ADVISORY_EXECUTOR_MODE=llm_canary in production"
+                    "AI_JUDGE_ASSISTANT_ADVISORY_EXECUTOR_MODE=llm/llm_canary in production"
                 )
 
 

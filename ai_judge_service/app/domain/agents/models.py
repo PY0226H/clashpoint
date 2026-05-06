@@ -4,9 +4,10 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 AGENT_KIND_JUDGE = "judge"
+AGENT_KIND_DEBATE_ASSISTANT = "debate_assistant"
 AGENT_KIND_NPC_COACH = "npc_coach"
 AGENT_KIND_ROOM_QA = "room_qa"
-AgentKind = Literal["judge", "npc_coach", "room_qa"]
+AgentKind = Literal["judge", "debate_assistant", "npc_coach", "room_qa"]
 
 ROLE_CLERK = "clerk"
 ROLE_RECORDER = "recorder"

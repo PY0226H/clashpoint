@@ -785,6 +785,185 @@ async fn spawn_mock_assistant_advisory_server(
 }
 
 #[derive(Debug, Deserialize)]
+struct MockDebateAssistantRequest {
+    trace_id: String,
+    intent: String,
+    question: String,
+    draft: Option<String>,
+    side: String,
+    #[serde(rename = "caseId")]
+    case_id: Option<u64>,
+    #[serde(rename = "roomTranscriptContext")]
+    room_transcript_context: Value,
+}
+
+async fn grant_debate_assistant_entitlement(state: &AppState, user_id: i64) -> Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO user_entitlements(user_id, feature_key, status, source, starts_at)
+        VALUES ($1, 'debate_assistant', 'active', 'test_fixture', NOW() - INTERVAL '1 minute')
+        ON CONFLICT (user_id, feature_key) DO UPDATE
+        SET status = 'active',
+            source = 'test_fixture',
+            starts_at = NOW() - INTERVAL '1 minute',
+            expires_at = NULL,
+            updated_at = NOW()
+        "#,
+    )
+    .bind(user_id)
+    .execute(&state.pool)
+    .await?;
+    Ok(())
+}
+
+fn mock_debate_assistant_payload(
+    session_id: u64,
+    case_id: Option<u64>,
+    room_transcript_context: Value,
+    extra_payload: &Value,
+) -> Value {
+    let mut payload = json!({
+        "version": "debate_assistant_contract_v1",
+        "agentKind": "debate_assistant",
+        "sessionId": session_id,
+        "caseId": case_id,
+        "advisoryOnly": true,
+        "status": "not_ready",
+        "statusReason": "debate_assistant_not_ready",
+        "accepted": false,
+        "errorCode": "debate_assistant_not_ready",
+        "errorMessage": "assistant llm executor is not configured",
+        "capabilityBoundary": {
+            "mode": "advisory_only",
+            "advisoryOnly": true,
+            "officialVerdictAuthority": false,
+            "writesVerdictLedger": false,
+            "writesJudgeTrace": false,
+            "canTriggerOfficialJudgeRoles": false
+        },
+        "sharedContext": room_transcript_context,
+        "advisoryContext": {
+            "advisoryOnly": true,
+            "roomTranscriptContext": room_transcript_context,
+            "readPolicy": {
+                "allowedSources": ["room_transcript_context", "user_question", "user_draft"],
+                "forbiddenWriteTargets": ["public_room_message", "verdict_ledger", "judge_trace"],
+                "officialJudgeFeedbackAllowed": false
+            }
+        },
+        "output": {
+            "accepted": false,
+            "intent": "room_summary",
+            "answerSummary": null,
+            "keyPoints": [],
+            "suggestedActions": [],
+            "contextCaveats": ["assistant not ready"],
+            "boundaryNotice": "正式结果以赛后官方裁决为准。",
+            "sourceUsePolicy": "仅基于当前房间公开内容和用户输入。"
+        },
+        "cacheProfile": {
+            "cacheable": false,
+            "ttlSeconds": 0,
+            "cacheKey": format!("debate-assistant:session:{session_id}"),
+            "varyBy": ["authorization", "sessionId", "intent"]
+        }
+    });
+    if let Some(object) = extra_payload.as_object() {
+        let payload_object = payload
+            .as_object_mut()
+            .expect("mock debate assistant payload should be object");
+        for (key, value) in object {
+            payload_object.insert(key.clone(), value.clone());
+        }
+    }
+    payload
+}
+
+async fn spawn_mock_debate_assistant_server(
+    expected_internal_key: String,
+    extra_payload: Value,
+) -> Result<String> {
+    let app = Router::new().route(
+        "/internal/judge/apps/debate-assistant/sessions/:session_id/query",
+        post(
+            move |Path(session_id): Path<u64>,
+                  headers: HeaderMap,
+                  Json(input): Json<MockDebateAssistantRequest>| {
+                let expected_internal_key = expected_internal_key.clone();
+                let extra_payload = extra_payload.clone();
+                async move {
+                    if headers
+                        .get("x-ai-internal-key")
+                        .and_then(|value| value.to_str().ok())
+                        != Some(expected_internal_key.as_str())
+                    {
+                        return (AxumStatusCode::UNAUTHORIZED, Json(json!({ "ok": false })));
+                    }
+                    let recent_count = input
+                        .room_transcript_context
+                        .get("recentMessages")
+                        .and_then(Value::as_array)
+                        .map(Vec::len)
+                        .unwrap_or(usize::MAX);
+                    let redacted = input
+                        .room_transcript_context
+                        .get("redaction")
+                        .and_then(Value::as_object)
+                        .and_then(|redaction| redaction.get("officialVerdictFieldsRedacted"))
+                        .and_then(Value::as_bool)
+                        == Some(true);
+                    if input.trace_id.trim().is_empty()
+                        || input.question.trim().is_empty()
+                        || !matches!(
+                            input.intent.as_str(),
+                            "room_summary"
+                                | "opponent_summary"
+                                | "unanswered_points"
+                                | "speech_structure"
+                                | "draft_polish"
+                        )
+                        || input.side != "pro"
+                        || recent_count > 60
+                        || !redacted
+                        || input.room_transcript_context.get("walletBalance").is_some()
+                        || input
+                            .room_transcript_context
+                            .get("membershipTier")
+                            .is_some()
+                    {
+                        return (
+                            AxumStatusCode::UNPROCESSABLE_ENTITY,
+                            Json(json!({ "ok": false })),
+                        );
+                    }
+                    if input.intent == "draft_polish"
+                        && input.draft.as_deref().unwrap_or_default().trim().is_empty()
+                    {
+                        return (
+                            AxumStatusCode::UNPROCESSABLE_ENTITY,
+                            Json(json!({ "ok": false })),
+                        );
+                    }
+                    let payload = mock_debate_assistant_payload(
+                        session_id,
+                        input.case_id,
+                        input.room_transcript_context,
+                        &extra_payload,
+                    );
+                    (AxumStatusCode::OK, Json(payload))
+                }
+            },
+        ),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    Ok(format!("http://{}", addr))
+}
+
+#[derive(Debug, Deserialize)]
 struct MockChallengeOpsQueueQuery {
     challenge_state: Option<String>,
     limit: Option<u32>,
@@ -2201,6 +2380,203 @@ async fn request_npc_coach_advice_should_forbid_non_participant() -> Result<()> 
         }
         other => panic!("unexpected error: {other:?}"),
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_debate_assistant_status_should_show_non_member_lock() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "running").await?;
+    let participant = find_user(&state, 2).await?;
+    add_participant(&state, session_id, participant.id, "pro").await?;
+
+    let out = state
+        .get_debate_assistant_status(session_id as u64, &participant)
+        .await?;
+
+    assert_eq!(out.agent_kind, "debate_assistant");
+    assert!(!out.available);
+    assert_eq!(out.viewer_role, "participant");
+    assert_eq!(out.viewer_side.as_deref(), Some("pro"));
+    assert!(out.membership.required);
+    assert!(!out.membership.active);
+    assert_eq!(out.membership.status, "missing");
+    assert_eq!(out.quota.limit, 20);
+    assert_eq!(out.quota.used, 0);
+    assert_eq!(out.quota.remaining, 20);
+    assert!(out.intents.contains(&"room_summary".to_string()));
+    Ok(())
+}
+
+#[tokio::test]
+async fn request_debate_assistant_query_should_require_membership() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "running").await?;
+    let participant = find_user(&state, 2).await?;
+    add_participant(&state, session_id, participant.id, "pro").await?;
+
+    let err = state
+        .request_debate_assistant_query(
+            session_id as u64,
+            &participant,
+            RequestDebateAssistantQueryInput {
+                intent: "room_summary".to_string(),
+                question: "现在双方主要争点是什么？".to_string(),
+                draft: None,
+                trace_id: None,
+                side: None,
+                case_id: None,
+            },
+        )
+        .await
+        .expect_err("non-member participant should not query debate assistant");
+
+    match err {
+        AppError::DebateConflict(code) => {
+            assert_eq!(code, "debate_assistant_membership_required");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn request_debate_assistant_query_should_proxy_context_and_confirm_quota() -> Result<()> {
+    let (_tdb, mut state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "running").await?;
+    let participant = find_user(&state, 2).await?;
+    add_participant(&state, session_id, participant.id, "pro").await?;
+    grant_debate_assistant_entitlement(&state, participant.id).await?;
+    seed_messages(&state, session_id, 65).await?;
+    let service_base_url = spawn_mock_debate_assistant_server(
+        "assistant-key".to_string(),
+        json!({
+            "status": "ok",
+            "statusReason": "debate_assistant_ready",
+            "accepted": true,
+            "errorCode": Value::Null,
+            "errorMessage": Value::Null,
+            "output": {
+                "accepted": true,
+                "intent": "room_summary",
+                "answerSummary": "双方正在围绕核心机制和证据可靠性展开争论。",
+                "keyPoints": ["正方强调机制收益", "反方追问证据适用范围"],
+                "suggestedActions": ["先回应反方对证据适用范围的追问"],
+                "contextCaveats": ["仅基于当前公开发言窗口"],
+                "boundaryNotice": "正式结果以赛后官方裁决为准。",
+                "sourceUsePolicy": "仅基于当前房间公开内容和用户输入。"
+            }
+        }),
+    )
+    .await?;
+    let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+    inner.config.ai_judge.service_base_url = service_base_url;
+    inner.config.ai_judge.internal_key = "assistant-key".to_string();
+    inner.config.ai_judge.assistant_timeout_ms = 2_000;
+
+    let out = state
+        .request_debate_assistant_query(
+            session_id as u64,
+            &participant,
+            RequestDebateAssistantQueryInput {
+                intent: "room_summary".to_string(),
+                question: "现在双方主要争点是什么？".to_string(),
+                draft: None,
+                trace_id: Some("chat-test-trace-debate-assistant".to_string()),
+                side: None,
+                case_id: None,
+            },
+        )
+        .await?;
+
+    assert_eq!(out.version, "debate_assistant_contract_v1");
+    assert_eq!(out.agent_kind, "debate_assistant");
+    assert_eq!(out.status, "ok");
+    assert_eq!(out.status_reason, "debate_assistant_ready");
+    assert!(out.accepted);
+    assert_eq!(
+        out.shared_context["version"],
+        json!("assistant_room_transcript_context_v1")
+    );
+    assert_eq!(
+        out.shared_context["recentMessages"]
+            .as_array()
+            .expect("recent messages should be array")
+            .len(),
+        60
+    );
+    assert_eq!(
+        out.shared_context["redaction"]["membershipSignalsRedacted"],
+        json!(true)
+    );
+    assert!(out.shared_context.get("walletBalance").is_none());
+    assert_eq!(
+        out.output["answerSummary"],
+        json!("双方正在围绕核心机制和证据可靠性展开争论。")
+    );
+
+    let status = state
+        .get_debate_assistant_status(session_id as u64, &participant)
+        .await?;
+    assert_eq!(status.quota.used, 1);
+    assert_eq!(status.quota.remaining, 19);
+    Ok(())
+}
+
+#[tokio::test]
+async fn request_debate_assistant_query_should_fail_closed_without_quota_on_official_leak(
+) -> Result<()> {
+    let (_tdb, mut state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "running").await?;
+    let participant = find_user(&state, 2).await?;
+    add_participant(&state, session_id, participant.id, "pro").await?;
+    grant_debate_assistant_entitlement(&state, participant.id).await?;
+    seed_messages(&state, session_id, 2).await?;
+    let service_base_url = spawn_mock_debate_assistant_server(
+        "assistant-key".to_string(),
+        json!({
+            "status": "ok",
+            "statusReason": "debate_assistant_ready",
+            "accepted": true,
+            "errorCode": Value::Null,
+            "errorMessage": Value::Null,
+            "output": {
+                "accepted": true,
+                "intent": "room_summary",
+                "winner": "pro"
+            }
+        }),
+    )
+    .await?;
+    let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+    inner.config.ai_judge.service_base_url = service_base_url;
+    inner.config.ai_judge.internal_key = "assistant-key".to_string();
+    inner.config.ai_judge.assistant_timeout_ms = 2_000;
+
+    let out = state
+        .request_debate_assistant_query(
+            session_id as u64,
+            &participant,
+            RequestDebateAssistantQueryInput {
+                intent: "room_summary".to_string(),
+                question: "现在双方主要争点是什么？".to_string(),
+                draft: None,
+                trace_id: None,
+                side: None,
+                case_id: None,
+            },
+        )
+        .await?;
+
+    assert_eq!(out.status, "contract_violation");
+    assert_eq!(out.status_reason, "debate_assistant_contract_violation");
+    assert!(!out.accepted);
+
+    let status = state
+        .get_debate_assistant_status(session_id as u64, &participant)
+        .await?;
+    assert_eq!(status.quota.used, 0);
+    assert_eq!(status.quota.remaining, 20);
     Ok(())
 }
 

@@ -32,7 +32,80 @@ class AppFactoryAssistantRouteTests(
         runtime = create_runtime(settings=_build_settings())
         profiles = runtime.agent_runtime.list_profiles()
         kinds = [row.kind for row in profiles]
-        self.assertEqual(kinds, ["judge", "npc_coach", "room_qa"])
+        self.assertEqual(kinds, ["debate_assistant", "judge", "npc_coach", "room_qa"])
+
+    async def test_debate_assistant_route_should_return_not_ready_contract(self) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+        context = {
+            "version": "assistant_room_transcript_context_v1",
+            "sessionId": 22,
+            "topic": {
+                "title": "辩题",
+                "description": "描述",
+                "category": "game",
+                "stancePro": "正方",
+                "stanceCon": "反方",
+            },
+            "session": {
+                "status": "running",
+                "scheduledStartAt": "2026-05-06T00:00:00Z",
+                "actualStartAt": "2026-05-06T00:00:00Z",
+                "endAt": "2026-05-06T01:00:00Z",
+            },
+            "viewer": {"userId": 2, "role": "participant", "side": "pro"},
+            "recentMessages": [
+                {
+                    "messageId": 1,
+                    "sessionId": 22,
+                    "userId": 2,
+                    "side": "pro",
+                    "content": "公开发言",
+                    "createdAt": "2026-05-06T00:01:00Z",
+                }
+            ],
+            "messageWindow": {
+                "limit": 60,
+                "order": "asc",
+                "truncated": False,
+                "latestMessageId": 1,
+            },
+            "redaction": {
+                "publicOnly": True,
+                "privateFieldsRedacted": True,
+                "officialVerdictFieldsRedacted": True,
+                "membershipSignalsRedacted": True,
+            },
+        }
+
+        resp = await self._post_json(
+            app=app,
+            path="/internal/judge/apps/debate-assistant/sessions/22/query",
+            payload={
+                "trace_id": "trace-debate-assistant-not-ready",
+                "intent": "room_summary",
+                "question": "现在双方主要争点是什么？",
+                "draft": None,
+                "side": "pro",
+                "caseId": None,
+                "roomTranscriptContext": context,
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["version"], "debate_assistant_contract_v1")
+        self.assertEqual(body["agentKind"], "debate_assistant")
+        self.assertTrue(body["advisoryOnly"])
+        self.assertEqual(body["status"], "not_ready")
+        self.assertEqual(body["statusReason"], "debate_assistant_not_ready")
+        self.assertFalse(body["accepted"])
+        self.assertEqual(body["sharedContext"], context)
+        self.assertEqual(body["advisoryContext"]["roomTranscriptContext"], context)
+        self.assertFalse(body["capabilityBoundary"]["officialVerdictAuthority"])
+        self.assertNotIn("winner", body["output"])
+        self.assertFalse(body["cacheProfile"]["cacheable"])
 
     async def test_npc_coach_shell_route_should_return_not_ready_with_shared_context(
         self,

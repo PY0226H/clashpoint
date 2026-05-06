@@ -228,6 +228,13 @@ export type DebateNpcActionFeedback = {
 
 export type JudgeAssistantAgentKind = "npc_coach" | "room_qa" | (string & {});
 
+export type DebateAssistantIntent =
+  | "room_summary"
+  | "opponent_summary"
+  | "unanswered_points"
+  | "speech_structure"
+  | "draft_polish";
+
 export type JudgeAssistantAdvisoryStatus =
   | "ok"
   | "not_ready"
@@ -249,12 +256,22 @@ export type RequestRoomQaAnswerInput = {
   caseId?: number;
 };
 
+export type RequestDebateAssistantQueryInput = {
+  intent: DebateAssistantIntent;
+  question: string;
+  draft?: string;
+  traceId?: string;
+  side?: DebateSide;
+  caseId?: number;
+};
+
 export type AssistantCapabilityBoundary = {
   mode?: string;
   advisoryOnly?: boolean;
   officialVerdictAuthority?: boolean;
   writesVerdictLedger?: boolean;
   writesJudgeTrace?: boolean;
+  canTriggerOfficialJudgeRoles?: boolean;
   [key: string]: JsonValue | undefined;
 };
 
@@ -309,6 +326,84 @@ export type JudgeAssistantAdvisoryOutput = {
   advisoryContext: JsonValue;
   output: JsonValue;
   cacheProfile: JudgeAssistantAdvisoryCacheProfile;
+};
+
+export type DebateAssistantMembershipStatus = {
+  required: boolean;
+  active: boolean;
+  featureKey: string;
+  status: string;
+  startsAt?: string | null;
+  expiresAt?: string | null;
+};
+
+export type DebateAssistantQuotaStatus = {
+  scope: string;
+  limit: number;
+  used: number;
+  remaining: number;
+  resetAt?: string | null;
+};
+
+export type DebateAssistantStatusOutput = {
+  sessionId: number;
+  agentKind: "debate_assistant";
+  available: boolean;
+  viewerRole: string;
+  viewerSide?: DebateSide | null | string;
+  membership: DebateAssistantMembershipStatus;
+  quota: DebateAssistantQuotaStatus;
+  intents: DebateAssistantIntent[];
+  boundaryNotice: string;
+};
+
+export type DebateAssistantStatus =
+  | "ok"
+  | "not_ready"
+  | "proxy_error"
+  | "contract_violation"
+  | "error"
+  | (string & {});
+
+export type DebateAssistantOutput = {
+  version: string;
+  agentKind: "debate_assistant";
+  sessionId: number;
+  caseId?: number | null;
+  advisoryOnly: boolean;
+  status: DebateAssistantStatus;
+  statusReason: string;
+  accepted: boolean;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  capabilityBoundary: AssistantCapabilityBoundary;
+  sharedContext: JsonValue;
+  advisoryContext: JsonValue;
+  output: JsonValue;
+  cacheProfile: JudgeAssistantAdvisoryCacheProfile;
+};
+
+export type DebateAssistantView = {
+  state:
+    | "ready"
+    | "not_ready"
+    | "proxy_error"
+    | "contract_violation"
+    | "quota_exhausted"
+    | "membership_required"
+    | "unknown";
+  label: string;
+  reasonCode: string;
+  accepted: boolean;
+  advisoryOnly: boolean;
+  caseId: number | null;
+  intent: string | null;
+  answerSummary: string | null;
+  keyPoints: string[];
+  suggestedActions: string[];
+  contextCaveats: string[];
+  boundaryNotice: string;
+  sourceUsePolicy: string | null;
 };
 
 export type JudgeAssistantAdvisoryView = {
@@ -905,10 +1000,20 @@ const ASSISTANT_FORBIDDEN_FIELD_KEYS = new Set([
   "artifactrefs",
   "providerconfig",
   "secret",
+  "secretref",
   "credential",
+  "internalkey",
+  "xaiinternalkey",
+  "walletbalance",
+  "membershiptier",
+  "userentitlements",
+  "phone",
+  "phonenumber",
+  "email",
   "officialverdictauthority",
   "writesverdictledger",
   "writesjudgetrace",
+  "cantriggerofficialjudgeroles",
 ]);
 
 function normalizeAssistantFieldKey(key: string): string {
@@ -1237,6 +1342,343 @@ export function resolveJudgeAssistantAdvisoryView(
     latestDispatchType: jsonString(roomContextSnapshot?.latestDispatchType),
     receiptSummary: assistantContextReceiptSummary(roomContextSnapshot),
     updatedAt: jsonString(roomContextSnapshot?.updatedAt),
+  };
+}
+
+const DEBATE_ASSISTANT_AGENT_KIND = "debate_assistant";
+const DEBATE_ASSISTANT_CONTRACT_VERSION = "debate_assistant_contract_v1";
+const DEBATE_ASSISTANT_CONTEXT_VERSION =
+  "assistant_room_transcript_context_v1";
+
+const DEBATE_ASSISTANT_INTENTS: readonly DebateAssistantIntent[] = [
+  "room_summary",
+  "opponent_summary",
+  "unanswered_points",
+  "speech_structure",
+  "draft_polish",
+] as const;
+
+const DEBATE_ASSISTANT_TOP_LEVEL_KEYS = [
+  "version",
+  "agentKind",
+  "sessionId",
+  "caseId",
+  "advisoryOnly",
+  "status",
+  "statusReason",
+  "accepted",
+  "errorCode",
+  "errorMessage",
+  "capabilityBoundary",
+  "sharedContext",
+  "advisoryContext",
+  "output",
+  "cacheProfile",
+] as const;
+
+const DEBATE_ASSISTANT_CONTEXT_KEYS = [
+  "version",
+  "sessionId",
+  "topic",
+  "session",
+  "viewer",
+  "recentMessages",
+  "messageWindow",
+  "redaction",
+] as const;
+
+const DEBATE_ASSISTANT_CONTEXT_REDACTION_KEYS = [
+  "publicOnly",
+  "privateFieldsRedacted",
+  "officialVerdictFieldsRedacted",
+  "membershipSignalsRedacted",
+] as const;
+
+const DEBATE_ASSISTANT_OUTPUT_KEYS = [
+  "accepted",
+  "intent",
+  "answerSummary",
+  "keyPoints",
+  "suggestedActions",
+  "contextCaveats",
+  "boundaryNotice",
+  "sourceUsePolicy",
+] as const;
+
+function isDebateAssistantIntent(value: string): value is DebateAssistantIntent {
+  return DEBATE_ASSISTANT_INTENTS.includes(value as DebateAssistantIntent);
+}
+
+function isEmptyJsonObject(value: JsonValue): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  return Object.keys(value).length === 0;
+}
+
+function debateAssistantBoundaryIsSafe(
+  boundary: AssistantCapabilityBoundary | null | undefined,
+): boolean {
+  if (!boundary || typeof boundary !== "object" || Array.isArray(boundary)) {
+    return false;
+  }
+  return (
+    jsonString(boundary.mode) === "advisory_only" &&
+    jsonBoolean(boundary.advisoryOnly) === true &&
+    jsonBoolean(boundary.officialVerdictAuthority) === false &&
+    jsonBoolean(boundary.writesVerdictLedger) === false &&
+    jsonBoolean(boundary.writesJudgeTrace) === false &&
+    jsonBoolean(boundary.canTriggerOfficialJudgeRoles) === false
+  );
+}
+
+function isDebateAssistantTranscriptContext(
+  value: JsonValue,
+  expectedSessionId: number,
+): boolean {
+  if (!objectHasExactKeys(value, DEBATE_ASSISTANT_CONTEXT_KEYS)) {
+    return false;
+  }
+  const redaction = value.redaction;
+  if (
+    !objectHasExactKeys(redaction, DEBATE_ASSISTANT_CONTEXT_REDACTION_KEYS)
+  ) {
+    return false;
+  }
+  return (
+    value.version === DEBATE_ASSISTANT_CONTEXT_VERSION &&
+    value.sessionId === expectedSessionId &&
+    matchesJsonObject(value.topic) &&
+    matchesJsonObject(value.session) &&
+    matchesJsonObject(value.viewer) &&
+    Array.isArray(value.recentMessages) &&
+    matchesJsonObject(value.messageWindow) &&
+    redaction.publicOnly === true &&
+    redaction.privateFieldsRedacted === true &&
+    redaction.officialVerdictFieldsRedacted === true &&
+    redaction.membershipSignalsRedacted === true &&
+    !hasForbiddenAssistantField(value)
+  );
+}
+
+function matchesJsonObject(value: JsonValue | undefined): boolean {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isDebateAssistantPublicOutput(
+  value: JsonValue,
+  topLevelAccepted: boolean,
+): boolean {
+  if (!objectHasExactKeys(value, DEBATE_ASSISTANT_OUTPUT_KEYS)) {
+    return false;
+  }
+  if (value.accepted !== topLevelAccepted) {
+    return false;
+  }
+  if (topLevelAccepted && !jsonString(value.intent)) {
+    return false;
+  }
+  if (value.intent != null && typeof value.intent !== "string") {
+    return false;
+  }
+  if (topLevelAccepted && !jsonString(value.answerSummary)) {
+    return false;
+  }
+  if (value.answerSummary != null && typeof value.answerSummary !== "string") {
+    return false;
+  }
+  return (
+    Array.isArray(value.keyPoints) &&
+    value.keyPoints.every((item) => typeof item === "string") &&
+    Array.isArray(value.suggestedActions) &&
+    value.suggestedActions.every((item) => typeof item === "string") &&
+    Array.isArray(value.contextCaveats) &&
+    value.contextCaveats.every((item) => typeof item === "string") &&
+    Boolean(jsonString(value.boundaryNotice)) &&
+    Boolean(jsonString(value.sourceUsePolicy)) &&
+    !hasForbiddenAssistantField(value)
+  );
+}
+
+export function assertDebateAssistantOutput(
+  output: DebateAssistantOutput,
+): DebateAssistantOutput {
+  if (!output || typeof output !== "object") {
+    throw new Error("debate assistant response is invalid");
+  }
+  if (
+    !objectHasExactKeys(
+      output as unknown as JsonValue,
+      DEBATE_ASSISTANT_TOP_LEVEL_KEYS,
+    )
+  ) {
+    throw new Error("debate assistant response top-level keys are invalid");
+  }
+  if (output.version !== DEBATE_ASSISTANT_CONTRACT_VERSION) {
+    throw new Error("debate assistant contract version is invalid");
+  }
+  if (output.agentKind !== DEBATE_ASSISTANT_AGENT_KIND) {
+    throw new Error("debate assistant agent kind is invalid");
+  }
+  if (output.advisoryOnly !== true) {
+    throw new Error("debate assistant response is not advisory-only");
+  }
+  if (!debateAssistantBoundaryIsSafe(output.capabilityBoundary)) {
+    throw new Error("debate assistant capability boundary is invalid");
+  }
+  if (output.accepted && output.status !== "ok") {
+    throw new Error("debate assistant accepted response must be ok");
+  }
+  if (output.status === "not_ready" && output.accepted) {
+    throw new Error("debate assistant not_ready response cannot be accepted");
+  }
+  if (!isDebateAssistantPublicOutput(output.output, output.accepted)) {
+    throw new Error("debate assistant output contract is invalid");
+  }
+
+  const requiresTranscriptContext =
+    output.accepted ||
+    output.status === "ok" ||
+    output.status === "not_ready" ||
+    output.status === "error";
+  if (
+    requiresTranscriptContext &&
+    !isDebateAssistantTranscriptContext(output.sharedContext, output.sessionId)
+  ) {
+    throw new Error("debate assistant transcript context is invalid");
+  }
+
+  const advisoryContext = asJsonObject(output.advisoryContext);
+  if (advisoryContext) {
+    const roomTranscriptContext = advisoryContext.roomTranscriptContext;
+    if (
+      !isEmptyJsonObject(output.sharedContext) &&
+      (!roomTranscriptContext ||
+        stableJsonValue(roomTranscriptContext) !==
+          stableJsonValue(output.sharedContext))
+    ) {
+      throw new Error("debate assistant advisory context is invalid");
+    }
+  }
+
+  if (
+    hasForbiddenAssistantField(output.output) ||
+    hasForbiddenAssistantField(output.sharedContext) ||
+    hasForbiddenAssistantField(output.advisoryContext)
+  ) {
+    throw new Error(
+      "debate assistant output contains forbidden official or private fields",
+    );
+  }
+  return output;
+}
+
+function debateAssistantViewState(
+  output: DebateAssistantOutput,
+): DebateAssistantView["state"] {
+  const reasonCode = String(output.errorCode || output.statusReason || "");
+  if (output.status === "ok" && output.accepted) {
+    return "ready";
+  }
+  if (reasonCode === "debate_assistant_membership_required") {
+    return "membership_required";
+  }
+  if (reasonCode === "debate_assistant_quota_exhausted") {
+    return "quota_exhausted";
+  }
+  if (output.status === "not_ready") {
+    return "not_ready";
+  }
+  if (output.status === "proxy_error") {
+    return "proxy_error";
+  }
+  if (
+    output.status === "contract_violation" ||
+    output.statusReason === "debate_assistant_contract_violation"
+  ) {
+    return "contract_violation";
+  }
+  return "unknown";
+}
+
+function debateAssistantLabel(
+  state: DebateAssistantView["state"],
+  reasonCode: string,
+): string {
+  if (state === "ready") {
+    return "辩论助手已生成建议";
+  }
+  if (state === "membership_required") {
+    return "会员专属助手";
+  }
+  if (state === "quota_exhausted") {
+    return "本场助手额度已用完";
+  }
+  if (state === "not_ready") {
+    return "辩论助手暂未启用";
+  }
+  if (state === "proxy_error") {
+    return "辩论助手暂不可用";
+  }
+  if (state === "contract_violation") {
+    return "辩论助手响应未通过安全校验";
+  }
+  return reasonCode || "辩论助手状态未知";
+}
+
+export function resolveDebateAssistantView(
+  output: DebateAssistantOutput | null | undefined,
+): DebateAssistantView {
+  if (!output) {
+    return {
+      state: "unknown",
+      label: "辩论助手状态未知",
+      reasonCode: "not_loaded",
+      accepted: false,
+      advisoryOnly: true,
+      caseId: null,
+      intent: null,
+      answerSummary: null,
+      keyPoints: [],
+      suggestedActions: [],
+      contextCaveats: [],
+      boundaryNotice: "私人辅助，不是官方裁决。",
+      sourceUsePolicy: null,
+    };
+  }
+  const state = debateAssistantViewState(output);
+  const result = asJsonObject(output.output);
+  const reasonCode =
+    String(output.errorCode || output.statusReason || output.status || "") ||
+    "unknown";
+  const fallbackSummary =
+    state === "not_ready"
+      ? "辩论助手暂未启用，当前不会影响官方裁决。"
+      : state === "proxy_error"
+        ? "辩论助手服务暂时不可用，请稍后重试。"
+        : state === "contract_violation"
+          ? "辩论助手响应未通过安全合同校验。"
+          : state === "quota_exhausted"
+            ? "本场可用次数已经用完。"
+            : null;
+  return {
+    state,
+    label: debateAssistantLabel(state, reasonCode),
+    reasonCode,
+    accepted: Boolean(output.accepted) && state === "ready",
+    advisoryOnly: output.advisoryOnly === true,
+    caseId: Number.isFinite(Number(output.caseId))
+      ? Number(output.caseId)
+      : null,
+    intent: jsonString(result?.intent),
+    answerSummary: jsonString(result?.answerSummary) || fallbackSummary,
+    keyPoints: state === "ready" ? jsonStringArray(result?.keyPoints) : [],
+    suggestedActions:
+      state === "ready" ? jsonStringArray(result?.suggestedActions) : [],
+    contextCaveats: jsonStringArray(result?.contextCaveats),
+    boundaryNotice:
+      jsonString(result?.boundaryNotice) || "私人辅助，不是官方裁决。",
+    sourceUsePolicy: jsonString(result?.sourceUsePolicy),
   };
 }
 
@@ -1690,6 +2132,64 @@ function normalizedAssistantCaseId(
     return undefined;
   }
   return Math.floor(parsed);
+}
+
+function normalizedDebateAssistantIntent(
+  value: DebateAssistantIntent | string,
+): DebateAssistantIntent {
+  const intent = String(value || "").trim().toLowerCase();
+  if (!isDebateAssistantIntent(intent)) {
+    throw new Error(
+      "intent must be one of: room_summary, opponent_summary, unanswered_points, speech_structure, draft_polish",
+    );
+  }
+  return intent;
+}
+
+function normalizedOptionalAssistantText(
+  value: string | null | undefined,
+): string | undefined {
+  const text = String(value || "").trim();
+  return text || undefined;
+}
+
+export async function requestDebateAssistantStatus(
+  sessionId: number,
+): Promise<DebateAssistantStatusOutput> {
+  const response = await http.get<DebateAssistantStatusOutput>(
+    `/debate/sessions/${sessionId}/assistant/debate-assistant/status`,
+  );
+  return response.data;
+}
+
+export async function requestDebateAssistant(
+  sessionId: number,
+  input: RequestDebateAssistantQueryInput,
+): Promise<DebateAssistantOutput> {
+  const body: RequestDebateAssistantQueryInput = {
+    intent: normalizedDebateAssistantIntent(input.intent),
+    question: normalizedRequiredAssistantText("question", input.question),
+  };
+  const draft = normalizedOptionalAssistantText(input.draft);
+  const traceId = normalizedAssistantTraceId(input.traceId);
+  const caseId = normalizedAssistantCaseId(input.caseId);
+  if (draft) {
+    body.draft = draft;
+  }
+  if (traceId) {
+    body.traceId = traceId;
+  }
+  if (input.side) {
+    body.side = normalizeDebateSide(input.side);
+  }
+  if (caseId) {
+    body.caseId = caseId;
+  }
+  const response = await http.post<DebateAssistantOutput>(
+    `/debate/sessions/${sessionId}/assistant/debate-assistant/query`,
+    body,
+  );
+  return assertDebateAssistantOutput(response.data);
 }
 
 export async function requestNpcCoachAdvice(
