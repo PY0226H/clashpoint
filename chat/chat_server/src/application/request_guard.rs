@@ -13,8 +13,9 @@ use std::{
 use tracing::warn;
 
 use crate::{
-    config::ServerForwardedHeaderTrustConfig, redis_store::RedisStore, AppError, AppState,
-    ErrorOutput, RateLimitDecision,
+    config::ServerForwardedHeaderTrustConfig,
+    redis_store::{rate_limit_burst_limit_for_scope, RedisStore},
+    AppError, AppState, ErrorOutput, RateLimitDecision,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -105,7 +106,8 @@ fn local_rate_limit_fallback_decision(
     let bucket = guard.entry(fallback_key).or_insert(LocalRateLimitBucket {
         tat_epoch_ms: now_ms,
     });
-    let decision = compute_gcra_fallback_decision(now_ms, bucket.tat_epoch_ms, limit, window_secs);
+    let decision =
+        compute_gcra_fallback_decision(scope, now_ms, bucket.tat_epoch_ms, limit, window_secs);
     if decision.allowed {
         bucket.tat_epoch_ms = decision.next_tat_epoch_ms;
     }
@@ -126,6 +128,7 @@ struct LocalGcraDecision {
 }
 
 fn compute_gcra_fallback_decision(
+    scope: &str,
     now_ms: u64,
     stored_tat_epoch_ms: u64,
     limit: u64,
@@ -142,7 +145,8 @@ fn compute_gcra_fallback_decision(
 
     let window_ms = window_secs.saturating_mul(1_000);
     let emission_interval_ms = ceil_div(window_ms, limit).max(1);
-    let burst_tolerance_ms = emission_interval_ms.saturating_mul(limit.saturating_sub(1));
+    let burst_limit = rate_limit_burst_limit_for_scope(scope, limit);
+    let burst_tolerance_ms = emission_interval_ms.saturating_mul(burst_limit.saturating_sub(1));
     let tat_epoch_ms = stored_tat_epoch_ms.max(now_ms);
     let allow_at_epoch_ms = tat_epoch_ms.saturating_sub(burst_tolerance_ms);
 
@@ -161,7 +165,7 @@ fn compute_gcra_fallback_decision(
         let immediate_budget_ms = burst_tolerance_ms.saturating_sub(consumed_ahead_ms);
         (immediate_budget_ms / emission_interval_ms)
             .saturating_add(1)
-            .min(limit)
+            .min(burst_limit)
     } else {
         0
     };
@@ -416,7 +420,8 @@ mod tests {
         let limit = 3;
         let window_secs = 3;
 
-        let first = compute_gcra_fallback_decision(now_ms, now_ms, limit, window_secs);
+        let first =
+            compute_gcra_fallback_decision("default_scope", now_ms, now_ms, limit, window_secs);
         assert_eq!(
             first,
             LocalGcraDecision {
@@ -427,8 +432,13 @@ mod tests {
             }
         );
 
-        let second =
-            compute_gcra_fallback_decision(now_ms, first.next_tat_epoch_ms, limit, window_secs);
+        let second = compute_gcra_fallback_decision(
+            "default_scope",
+            now_ms,
+            first.next_tat_epoch_ms,
+            limit,
+            window_secs,
+        );
         assert_eq!(
             second,
             LocalGcraDecision {
@@ -439,8 +449,13 @@ mod tests {
             }
         );
 
-        let third =
-            compute_gcra_fallback_decision(now_ms, second.next_tat_epoch_ms, limit, window_secs);
+        let third = compute_gcra_fallback_decision(
+            "default_scope",
+            now_ms,
+            second.next_tat_epoch_ms,
+            limit,
+            window_secs,
+        );
         assert_eq!(
             third,
             LocalGcraDecision {
@@ -451,8 +466,13 @@ mod tests {
             }
         );
 
-        let fourth =
-            compute_gcra_fallback_decision(now_ms, third.next_tat_epoch_ms, limit, window_secs);
+        let fourth = compute_gcra_fallback_decision(
+            "default_scope",
+            now_ms,
+            third.next_tat_epoch_ms,
+            limit,
+            window_secs,
+        );
         assert_eq!(
             fourth,
             LocalGcraDecision {
@@ -471,8 +491,13 @@ mod tests {
         let window_secs = 3;
         let saturated_tat_ms = 1_003_000;
 
-        let ret =
-            compute_gcra_fallback_decision(now_ms + 1_000, saturated_tat_ms, limit, window_secs);
+        let ret = compute_gcra_fallback_decision(
+            "default_scope",
+            now_ms + 1_000,
+            saturated_tat_ms,
+            limit,
+            window_secs,
+        );
 
         assert_eq!(
             ret,
@@ -481,6 +506,62 @@ mod tests {
                 remaining: 0,
                 reset_at_epoch_secs: 1_002,
                 next_tat_epoch_ms: 1_004_000,
+            }
+        );
+    }
+
+    #[test]
+    fn gcra_fallback_should_honor_explicit_burst_scope() {
+        let now_ms = 1_000_000;
+        let limit = 10;
+        let window_secs = 10;
+
+        let first =
+            compute_gcra_fallback_decision("judge_job_request", now_ms, now_ms, limit, window_secs);
+        assert_eq!(
+            first,
+            LocalGcraDecision {
+                allowed: true,
+                remaining: 2,
+                reset_at_epoch_secs: 1_000,
+                next_tat_epoch_ms: 1_001_000,
+            }
+        );
+
+        let second = compute_gcra_fallback_decision(
+            "judge_job_request",
+            now_ms,
+            first.next_tat_epoch_ms,
+            limit,
+            window_secs,
+        );
+        assert!(second.allowed);
+        assert_eq!(second.remaining, 1);
+
+        let third = compute_gcra_fallback_decision(
+            "judge_job_request",
+            now_ms,
+            second.next_tat_epoch_ms,
+            limit,
+            window_secs,
+        );
+        assert!(third.allowed);
+        assert_eq!(third.remaining, 0);
+
+        let fourth = compute_gcra_fallback_decision(
+            "judge_job_request",
+            now_ms,
+            third.next_tat_epoch_ms,
+            limit,
+            window_secs,
+        );
+        assert_eq!(
+            fourth,
+            LocalGcraDecision {
+                allowed: false,
+                remaining: 0,
+                reset_at_epoch_secs: 1_001,
+                next_tat_epoch_ms: 1_003_000,
             }
         );
     }

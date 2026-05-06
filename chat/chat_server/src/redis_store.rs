@@ -26,11 +26,19 @@ const RATE_LIMIT_GCRA_SCRIPT: &str = r#"
 local key = KEYS[1]
 local limit = tonumber(ARGV[1])
 local window_ms = tonumber(ARGV[2])
+local burst_limit = tonumber(ARGV[3])
 
 if limit == nil or limit <= 0 or window_ms == nil or window_ms <= 0 then
   local now_parts = redis.call('TIME')
   local now_ms = tonumber(now_parts[1]) * 1000 + math.floor(tonumber(now_parts[2]) / 1000)
   return {1, limit or 0, now_ms, 0}
+end
+
+if burst_limit == nil or burst_limit <= 0 then
+  burst_limit = limit
+end
+if burst_limit > limit then
+  burst_limit = limit
 end
 
 local now_parts = redis.call('TIME')
@@ -40,7 +48,7 @@ if emission_interval_ms < 1 then
   emission_interval_ms = 1
 end
 
-local burst_capacity = limit - 1
+local burst_capacity = burst_limit - 1
 if burst_capacity < 0 then
   burst_capacity = 0
 end
@@ -67,8 +75,8 @@ local remaining = math.floor((burst_tolerance_ms - (new_tat_ms - now_ms)) / emis
 if remaining < 0 then
   remaining = 0
 end
-if remaining > limit then
-  remaining = limit
+if remaining > burst_limit then
+  remaining = burst_limit
 end
 local reset_at_ms = new_tat_ms - burst_tolerance_ms
 if reset_at_ms < now_ms then
@@ -255,12 +263,14 @@ impl RedisStore {
                 let mut conn = inner.manager.clone();
                 let redis_key = self.namespaced_key(&format!("rate_limit:gcra:{scope}"), raw_key);
                 let window_ms = window_secs.saturating_mul(1_000);
+                let burst_limit = rate_limit_burst_limit_for_scope(scope, limit);
                 let ret: Vec<i64> = redis::cmd("EVAL")
                     .arg(RATE_LIMIT_GCRA_SCRIPT)
                     .arg(1)
                     .arg(&redis_key)
                     .arg(limit as i64)
                     .arg(window_ms as i64)
+                    .arg(burst_limit as i64)
                     .query_async(&mut conn)
                     .await
                     .context("redis EVAL gcra rate limit failed")?;
@@ -672,6 +682,24 @@ fn epoch_ms_to_epoch_secs_ceil(epoch_ms: u64) -> u64 {
     epoch_ms.saturating_add(999) / 1_000
 }
 
+pub(crate) fn rate_limit_burst_limit_for_scope(scope: &str, limit: u64) -> u64 {
+    if limit == 0 {
+        return 0;
+    }
+    let configured = match scope.trim() {
+        "sms_send_phone" => Some(1),
+        "sms_send_ip" => Some(2),
+        "judge_job_request" => Some(3),
+        "iap_verify_user_tx" => Some(3),
+        "ops_observability_evaluate_once_execute_user" => Some(2),
+        "ops_observability_evaluate_once_execute_ip" => Some(6),
+        "ops_judge_calibration_decision_user" => Some(3),
+        "ops_judge_calibration_decision_ip" => Some(6),
+        _ => None,
+    };
+    configured.unwrap_or(limit).max(1).min(limit)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -716,6 +744,39 @@ mod tests {
         assert_eq!(epoch_ms_to_epoch_secs_ceil(1), 1);
         assert_eq!(epoch_ms_to_epoch_secs_ceil(1_000), 1);
         assert_eq!(epoch_ms_to_epoch_secs_ceil(1_001), 2);
+    }
+
+    #[test]
+    fn rate_limit_burst_limit_for_scope_should_default_to_limit() {
+        assert_eq!(
+            rate_limit_burst_limit_for_scope("wallet_balance_user", 180),
+            180
+        );
+    }
+
+    #[test]
+    fn rate_limit_burst_limit_for_scope_should_apply_high_risk_overrides() {
+        assert_eq!(rate_limit_burst_limit_for_scope("sms_send_phone", 5), 1);
+        assert_eq!(rate_limit_burst_limit_for_scope("sms_send_ip", 20), 2);
+        assert_eq!(rate_limit_burst_limit_for_scope("judge_job_request", 10), 3);
+        assert_eq!(
+            rate_limit_burst_limit_for_scope("iap_verify_user_tx", 30),
+            3
+        );
+        assert_eq!(
+            rate_limit_burst_limit_for_scope("ops_observability_evaluate_once_execute_user", 6),
+            2
+        );
+        assert_eq!(
+            rate_limit_burst_limit_for_scope("ops_judge_calibration_decision_ip", 60),
+            6
+        );
+    }
+
+    #[test]
+    fn rate_limit_burst_limit_for_scope_should_clamp_to_limit() {
+        assert_eq!(rate_limit_burst_limit_for_scope("judge_job_request", 2), 2);
+        assert_eq!(rate_limit_burst_limit_for_scope("sms_send_phone", 0), 0);
     }
 
     #[test]
