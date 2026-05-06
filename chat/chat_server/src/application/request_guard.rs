@@ -13,6 +13,7 @@ use std::{
 use tracing::warn;
 
 use crate::{
+    application::rate_limit_metrics::RateLimitRuntimeOutcome,
     config::ServerForwardedHeaderTrustConfig,
     redis_store::{rate_limit_burst_limit_for_scope, RedisStore},
     AppError, AppState, ErrorOutput, RateLimitDecision,
@@ -35,23 +36,51 @@ pub(crate) async fn enforce_rate_limit(
     limit: u64,
     window_secs: u64,
 ) -> RateLimitDecision {
+    let burst_limit = rate_limit_burst_limit_for_scope(scope, limit);
     match state
         .redis
         .check_rate_limit(scope, key, limit, window_secs)
         .await
     {
-        Ok(v) => v,
-        Err(err) => {
-            warn!(
-                "rate limit degraded to local fallback, scope={}, key={}, err={}",
-                scope, key, err
+        Ok(decision) => {
+            state.rate_limit_metrics.observe(
+                scope,
+                limit,
+                window_secs,
+                burst_limit,
+                RateLimitRuntimeOutcome::Redis,
+                &decision,
             );
-            local_rate_limit_fallback_decision(
+            decision
+        }
+        Err(err) => {
+            let fallback_window_secs = window_secs.max(1);
+            let decision = local_rate_limit_fallback_decision(
                 scope,
                 &build_local_rate_limit_fallback_key(state, key),
                 limit,
-                window_secs.max(1),
-            )
+                fallback_window_secs,
+            );
+            state.rate_limit_metrics.observe(
+                scope,
+                limit,
+                fallback_window_secs,
+                burst_limit,
+                RateLimitRuntimeOutcome::FallbackAfterRedisError,
+                &decision,
+            );
+            warn!(
+                scope = %scope.trim(),
+                limit,
+                window_secs = fallback_window_secs,
+                burst_limit,
+                fallback_allowed = decision.allowed,
+                remaining = decision.remaining,
+                reset_at_epoch_secs = decision.reset_at_epoch_secs,
+                error = %err,
+                "rate limit degraded to local fallback"
+            );
+            decision
         }
     }
 }
@@ -64,12 +93,22 @@ pub(crate) async fn enforce_rate_limit_with_disabled_fallback(
     window_secs: u64,
 ) -> RateLimitDecision {
     if matches!(&state.redis, RedisStore::Disabled { .. }) {
-        return local_rate_limit_fallback_decision(
+        let fallback_window_secs = window_secs.max(1);
+        let decision = local_rate_limit_fallback_decision(
             scope,
             &build_local_rate_limit_fallback_key(state, key),
             limit,
-            window_secs.max(1),
+            fallback_window_secs,
         );
+        state.rate_limit_metrics.observe(
+            scope,
+            limit,
+            fallback_window_secs,
+            rate_limit_burst_limit_for_scope(scope, limit),
+            RateLimitRuntimeOutcome::FallbackRedisDisabled,
+            &decision,
+        );
+        return decision;
     }
     enforce_rate_limit(state, scope, key, limit, window_secs).await
 }
@@ -413,6 +452,29 @@ impl SimpleIpv4Cidr {
 mod tests {
     use super::*;
     use axum::http::HeaderValue;
+    use std::path::PathBuf;
+
+    fn test_state() -> AppState {
+        let config = crate::AppConfig {
+            server: crate::config::ServerConfig {
+                port: 0,
+                db_url: "postgres://localhost:5432/chat".to_string(),
+                base_dir: PathBuf::from("/tmp/chat"),
+                forwarded_header_trust: crate::config::ServerForwardedHeaderTrustConfig::default(),
+            },
+            auth: crate::config::AuthConfig {
+                sk: include_str!("../../../chat_core/fixtures/encoding.pem").to_string(),
+                pk: include_str!("../../../chat_core/fixtures/decoding.pem").to_string(),
+            },
+            kafka: crate::config::KafkaConfig::default(),
+            redis: crate::config::RedisConfig::default(),
+            ai_judge: crate::config::AiJudgeConfig::default(),
+            analytics: crate::config::AnalyticsIngressConfig::default(),
+            worker_runtime: crate::config::WorkerRuntimeConfig::default(),
+            payment: crate::config::PaymentConfig::default(),
+        };
+        AppState::new_for_unit_test(config).expect("build unit test state")
+    }
 
     #[test]
     fn gcra_fallback_should_allow_configured_burst_then_reject() {
@@ -572,6 +634,37 @@ mod tests {
         assert_eq!(ceil_div(1, 3), 1);
         assert_eq!(ceil_div(3, 3), 1);
         assert_eq!(ceil_div(4, 3), 2);
+    }
+
+    #[tokio::test]
+    async fn enforce_rate_limit_with_disabled_fallback_should_record_runtime_metrics() {
+        let state = test_state();
+        let decision = enforce_rate_limit_with_disabled_fallback(
+            &state,
+            "request_guard_disabled_fallback_metrics",
+            "raw-key-should-not-appear",
+            1,
+            60,
+        )
+        .await;
+
+        assert!(decision.allowed);
+        assert_eq!(decision.limit, 1);
+        assert_eq!(decision.remaining, 0);
+        assert!(decision.reset_at_epoch_secs > 0);
+        let snapshot = state.get_rate_limit_metrics();
+        assert_eq!(snapshot.global.request_total, 1);
+        assert_eq!(snapshot.global.allowed_total, 1);
+        assert_eq!(snapshot.global.fallback_allowed_total, 1);
+        assert_eq!(snapshot.global.redis_disabled_fallback_total, 1);
+        assert_eq!(snapshot.global.near_limit_total, 1);
+        assert_eq!(snapshot.scopes.len(), 1);
+        assert_eq!(
+            snapshot.scopes[0].scope,
+            "request_guard_disabled_fallback_metrics"
+        );
+        let serialized = serde_json::to_string(&snapshot).expect("serialize metrics snapshot");
+        assert!(!serialized.contains("raw-key-should-not-appear"));
     }
 
     #[test]

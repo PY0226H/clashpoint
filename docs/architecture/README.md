@@ -1,6 +1,6 @@
 # EchoIsle Architecture Map
 
-更新时间：2026-05-04
+更新时间：2026-05-06
 状态：当前主线轻量代码地图（AI Judge 当前有效主线为 Official Verdict Plane；虚拟裁判 NPC 下一阶段正在开发；NPC Coach / Room QA 已暂停）
 
 ---
@@ -221,7 +221,17 @@ AI Judge real-env / runtime evidence 优先看：
 5. [ticket.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/ticket.rs)
 6. [messages.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/messages.rs)
 
-### 3.7 AI RAG / 检索 / Bot
+### 3.7 Redis / 限流 / 内部基础设施
+
+优先看：
+
+1. [request_guard.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/application/request_guard.rs)
+2. [rate_limit_metrics.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/application/rate_limit_metrics.rs)
+3. [redis_store.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/redis_store.rs)
+4. [ai_internal.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/ai_internal.rs)
+5. [openapi.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/openapi.rs)
+
+### 3.8 AI RAG / 检索 / Bot
 
 优先看：
 
@@ -232,7 +242,7 @@ AI Judge real-env / runtime evidence 优先看：
 5. [bot_server notif.rs](/Users/panyihang/Documents/EchoIsle/chat/bot_server/src/notif.rs)
 6. [bot_server indexer.rs](/Users/panyihang/Documents/EchoIsle/chat/bot_server/src/indexer.rs)
 
-### 3.8 Codex / Harness / 质量门禁
+### 3.9 Codex / Harness / 质量门禁
 
 优先看：
 

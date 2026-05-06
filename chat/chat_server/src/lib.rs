@@ -28,7 +28,12 @@ use tokio::{
 use tower_http::cors::{self, CorsLayer};
 use tracing::{info, warn};
 
-use application::runtime_workers::spawn_background_workers;
+pub use application::rate_limit_metrics::{
+    GetRateLimitMetricsOutput, RateLimitGlobalMetricsOutput, RateLimitScopeMetricsOutput,
+};
+use application::{
+    rate_limit_metrics::RateLimitRuntimeMetrics, runtime_workers::spawn_background_workers,
+};
 pub use error::{AppError, ErrorOutput};
 pub(crate) use event_bus::{
     DebateMessageCreatedEvent, DebateMessagePinnedEvent, DebateNpcActionCreatedEvent,
@@ -67,6 +72,7 @@ pub struct AppStateInner {
     pub(crate) event_outbox_metrics: EventOutboxRelayMetrics,
     pub(crate) kafka_consumer_metrics: Arc<KafkaConsumerRuntimeMetrics>,
     pub(crate) auth_consistency_metrics: AuthConsistencyMetrics,
+    pub(crate) rate_limit_metrics: RateLimitRuntimeMetrics,
     pub(crate) dispatch_trigger_tx: Option<UnboundedSender<JudgeDispatchTrigger>>,
 }
 
@@ -335,6 +341,10 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
         .route("/infra/redis/health", get(get_redis_health_handler))
         .route("/infra/redis/ready", get(get_redis_ready_handler))
         .route(
+            "/infra/rate-limit/metrics",
+            get(get_rate_limit_metrics_handler),
+        )
+        .route(
             "/auth/consistency/metrics",
             get(get_auth_consistency_metrics_handler),
         )
@@ -544,6 +554,7 @@ impl AppState {
                 event_outbox_metrics: EventOutboxRelayMetrics::default(),
                 kafka_consumer_metrics,
                 auth_consistency_metrics: AuthConsistencyMetrics::default(),
+                rate_limit_metrics: RateLimitRuntimeMetrics::default(),
                 dispatch_trigger_tx,
             }),
         };
@@ -590,6 +601,7 @@ impl AppState {
                 event_outbox_metrics: EventOutboxRelayMetrics::default(),
                 kafka_consumer_metrics: Arc::new(KafkaConsumerRuntimeMetrics::default()),
                 auth_consistency_metrics: AuthConsistencyMetrics::default(),
+                rate_limit_metrics: RateLimitRuntimeMetrics::default(),
                 dispatch_trigger_tx: None,
             }),
         })
@@ -597,6 +609,10 @@ impl AppState {
 
     pub async fn get_redis_health(&self) -> RedisHealthOutput {
         self.redis.health_snapshot().await
+    }
+
+    pub fn get_rate_limit_metrics(&self) -> GetRateLimitMetricsOutput {
+        self.rate_limit_metrics.snapshot()
     }
 
     pub(crate) fn trigger_judge_dispatch(&self, trigger: JudgeDispatchTrigger) {
@@ -903,6 +919,7 @@ mod test_util {
                     event_outbox_metrics: EventOutboxRelayMetrics::default(),
                     kafka_consumer_metrics: Arc::new(KafkaConsumerRuntimeMetrics::default()),
                     auth_consistency_metrics: AuthConsistencyMetrics::default(),
+                    rate_limit_metrics: RateLimitRuntimeMetrics::default(),
                     dispatch_trigger_tx: None,
                 }),
             };

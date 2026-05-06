@@ -251,6 +251,25 @@ pub(crate) async fn get_redis_ready_handler(
     Ok((StatusCode::SERVICE_UNAVAILABLE, Json(health)).into_response())
 }
 
+/// 内部限流运行态指标快照，仅允许 internal key 访问。
+#[utoipa::path(
+    get,
+    path = "/api/internal/ai/infra/rate-limit/metrics",
+    responses(
+        (status = 200, description = "Rate-limit runtime metrics snapshot", body = crate::GetRateLimitMetricsOutput),
+        (status = 401, description = "Missing or invalid internal key"),
+    ),
+    security(
+        ("internal_key" = [])
+    )
+)]
+pub(crate) async fn get_rate_limit_metrics_handler(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, AppError> {
+    let ret = state.get_rate_limit_metrics();
+    Ok((StatusCode::OK, Json(ret)))
+}
+
 /// Internal endpoint to inspect auth consistency metrics and retry queue health.
 #[utoipa::path(
     get,
@@ -420,6 +439,69 @@ mod tests {
             )
             .await?;
         assert_eq!(authorized.status(), StatusCode::SERVICE_UNAVAILABLE);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_rate_limit_metrics_handler_should_require_internal_key_and_return_snapshot(
+    ) -> Result<()> {
+        let state = test_state()?;
+        state.rate_limit_metrics.observe_observation(
+            crate::application::rate_limit_metrics::RateLimitRuntimeObservation {
+                scope: "judge_job_request",
+                limit: 10,
+                window_secs: 300,
+                burst_limit: 3,
+                outcome: crate::application::rate_limit_metrics::RateLimitRuntimeOutcome::Redis,
+                decision: &crate::RateLimitDecision {
+                    allowed: false,
+                    limit: 10,
+                    remaining: 0,
+                    reset_at_epoch_secs: 1_700,
+                },
+                observed_at_ms: 1_700_000,
+            },
+        );
+        let app = Router::new()
+            .route(
+                "/infra/rate-limit/metrics",
+                get(get_rate_limit_metrics_handler),
+            )
+            .layer(from_fn_with_state(
+                state.clone(),
+                crate::verify_ai_internal_key,
+            ))
+            .with_state(state);
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/infra/rate-limit/metrics")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let authorized = app
+            .oneshot(
+                Request::builder()
+                    .uri("/infra/rate-limit/metrics")
+                    .header("x-ai-internal-key", "secret-key")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(authorized.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(authorized.into_body(), usize::MAX).await?;
+        let body_text = std::str::from_utf8(&body)?;
+        assert!(!body_text.contains("raw"));
+        let payload: crate::GetRateLimitMetricsOutput = serde_json::from_slice(&body)?;
+        assert_eq!(payload.global.request_total, 1);
+        assert_eq!(payload.global.rejected_total, 1);
+        assert_eq!(payload.global.redis_rejected_total, 1);
+        assert_eq!(payload.scopes.len(), 1);
+        assert_eq!(payload.scopes[0].scope, "judge_job_request");
+        assert_eq!(payload.scopes[0].last_rejected_at_ms, Some(1_700_000));
         Ok(())
     }
 
