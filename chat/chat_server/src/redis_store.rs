@@ -22,6 +22,61 @@ const REDIS_HEALTH_REASON_DISABLED_BY_CONFIG: &str = "redis_disabled_by_config";
 const REDIS_HEALTH_REASON_STARTUP_FAIL_OPEN: &str = "redis_unavailable_startup_fail_open";
 const REDIS_HEALTH_REASON_PING_TIMEOUT: &str = "redis_ping_timeout";
 const REDIS_HEALTH_REASON_PING_COMMAND_FAILED: &str = "redis_ping_command_failed";
+const RATE_LIMIT_GCRA_SCRIPT: &str = r#"
+local key = KEYS[1]
+local limit = tonumber(ARGV[1])
+local window_ms = tonumber(ARGV[2])
+
+if limit == nil or limit <= 0 or window_ms == nil or window_ms <= 0 then
+  local now_parts = redis.call('TIME')
+  local now_ms = tonumber(now_parts[1]) * 1000 + math.floor(tonumber(now_parts[2]) / 1000)
+  return {1, limit or 0, now_ms, 0}
+end
+
+local now_parts = redis.call('TIME')
+local now_ms = tonumber(now_parts[1]) * 1000 + math.floor(tonumber(now_parts[2]) / 1000)
+local emission_interval_ms = math.floor((window_ms + limit - 1) / limit)
+if emission_interval_ms < 1 then
+  emission_interval_ms = 1
+end
+
+local burst_capacity = limit - 1
+if burst_capacity < 0 then
+  burst_capacity = 0
+end
+local burst_tolerance_ms = emission_interval_ms * burst_capacity
+
+local tat_ms = tonumber(redis.call('GET', key))
+if tat_ms == nil or tat_ms < now_ms then
+  tat_ms = now_ms
+end
+
+local allow_at_ms = tat_ms - burst_tolerance_ms
+if now_ms < allow_at_ms then
+  return {0, 0, allow_at_ms, allow_at_ms - now_ms}
+end
+
+local new_tat_ms = tat_ms + emission_interval_ms
+local ttl_ms = burst_tolerance_ms + emission_interval_ms
+if ttl_ms < 1 then
+  ttl_ms = 1
+end
+redis.call('SET', key, tostring(new_tat_ms), 'PX', ttl_ms)
+
+local remaining = math.floor((burst_tolerance_ms - (new_tat_ms - now_ms)) / emission_interval_ms) + 1
+if remaining < 0 then
+  remaining = 0
+end
+if remaining > limit then
+  remaining = limit
+end
+local reset_at_ms = new_tat_ms - burst_tolerance_ms
+if reset_at_ms < now_ms then
+  reset_at_ms = now_ms
+end
+
+return {1, remaining, reset_at_ms, 0}
+"#;
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -198,41 +253,28 @@ impl RedisStore {
             }),
             Self::Enabled(inner) => {
                 let mut conn = inner.manager.clone();
-                let redis_key = self.namespaced_key(&format!("rate_limit:{scope}"), raw_key);
-                let current: i64 = redis::cmd("INCR")
+                let redis_key = self.namespaced_key(&format!("rate_limit:gcra:{scope}"), raw_key);
+                let window_ms = window_secs.saturating_mul(1_000);
+                let ret: Vec<i64> = redis::cmd("EVAL")
+                    .arg(RATE_LIMIT_GCRA_SCRIPT)
+                    .arg(1)
                     .arg(&redis_key)
+                    .arg(limit as i64)
+                    .arg(window_ms as i64)
                     .query_async(&mut conn)
                     .await
-                    .context("redis INCR rate limit failed")?;
-                if current <= 1 {
-                    let _: i64 = redis::cmd("EXPIRE")
-                        .arg(&redis_key)
-                        .arg(window_secs as i64)
-                        .query_async(&mut conn)
-                        .await
-                        .context("redis EXPIRE rate limit key failed")?;
+                    .context("redis EVAL gcra rate limit failed")?;
+                if ret.len() != 4 {
+                    anyhow::bail!("unexpected gcra rate limit result length: {}", ret.len());
                 }
-                let mut ttl_secs: i64 = redis::cmd("TTL")
-                    .arg(&redis_key)
-                    .query_async(&mut conn)
-                    .await
-                    .context("redis TTL rate limit key failed")?;
-                if ttl_secs < 0 {
-                    let _: i64 = redis::cmd("EXPIRE")
-                        .arg(&redis_key)
-                        .arg(window_secs as i64)
-                        .query_async(&mut conn)
-                        .await
-                        .context("redis EXPIRE fallback rate limit key failed")?;
-                    ttl_secs = window_secs as i64;
-                }
-                let current_u64 = current.max(0) as u64;
-                let remaining = limit.saturating_sub(current_u64);
+                let allowed = ret[0] == 1;
+                let remaining = ret[1].max(0) as u64;
+                let reset_at_epoch_secs = epoch_ms_to_epoch_secs_ceil(ret[2].max(0) as u64);
                 Ok(RateLimitDecision {
-                    allowed: current_u64 <= limit,
+                    allowed,
                     limit,
                     remaining,
-                    reset_at_epoch_secs: now_secs + (ttl_secs.max(0) as u64),
+                    reset_at_epoch_secs,
                 })
             }
         }
@@ -626,6 +668,10 @@ fn now_ms() -> i64 {
     Utc::now().timestamp_millis()
 }
 
+fn epoch_ms_to_epoch_secs_ceil(epoch_ms: u64) -> u64 {
+    epoch_ms.saturating_add(999) / 1_000
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -645,6 +691,31 @@ mod tests {
             store.namespaced_key("rate_limit", "signin:alice@example.com"),
             "echoisle:rate_limit:signin:alice@example.com"
         );
+    }
+
+    #[test]
+    fn namespaced_key_should_support_gcra_rate_limit_namespace() {
+        let config = RedisConfig {
+            enabled: false,
+            key_prefix: "echoisle".to_string(),
+            ..RedisConfig::default()
+        };
+        let store = RedisStore::Disabled {
+            config,
+            message: "disabled".to_string(),
+        };
+        assert_eq!(
+            store.namespaced_key("rate_limit:gcra:signin", "alice@example.com"),
+            "echoisle:rate_limit:gcra:signin:alice@example.com"
+        );
+    }
+
+    #[test]
+    fn epoch_ms_to_epoch_secs_ceil_should_round_up() {
+        assert_eq!(epoch_ms_to_epoch_secs_ceil(0), 0);
+        assert_eq!(epoch_ms_to_epoch_secs_ceil(1), 1);
+        assert_eq!(epoch_ms_to_epoch_secs_ceil(1_000), 1);
+        assert_eq!(epoch_ms_to_epoch_secs_ceil(1_001), 2);
     }
 
     #[test]

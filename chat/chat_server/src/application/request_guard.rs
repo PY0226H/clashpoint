@@ -19,8 +19,7 @@ use crate::{
 
 #[derive(Debug, Clone, Copy)]
 struct LocalRateLimitBucket {
-    window_start_epoch_secs: u64,
-    count: u64,
+    tat_epoch_ms: u64,
 }
 
 const LOCAL_RATE_LIMIT_FALLBACK_MAX_KEYS: usize = 20_000;
@@ -84,14 +83,16 @@ fn local_rate_limit_fallback_decision(
     limit: u64,
     window_secs: u64,
 ) -> RateLimitDecision {
-    let now_secs = Utc::now().timestamp().max(0) as u64;
+    let now_ms = Utc::now().timestamp_millis().max(0) as u64;
     let fallback_key = format!("{}::{}", scope.trim(), key.trim());
     if limit == 0 {
         return RateLimitDecision {
             allowed: true,
             limit,
             remaining: limit,
-            reset_at_epoch_secs: now_secs + window_secs,
+            reset_at_epoch_secs: epoch_ms_to_epoch_secs_ceil(
+                now_ms.saturating_add(window_secs.saturating_mul(1_000)),
+            ),
         };
     }
     let mut guard = match LOCAL_RATE_LIMIT_FALLBACK.lock() {
@@ -99,28 +100,92 @@ fn local_rate_limit_fallback_decision(
         Err(poisoned) => poisoned.into_inner(),
     };
     if guard.len() > LOCAL_RATE_LIMIT_FALLBACK_MAX_KEYS {
-        guard.retain(|_, bucket| {
-            now_secs.saturating_sub(bucket.window_start_epoch_secs) <= window_secs
-        });
+        guard.retain(|_, bucket| bucket.tat_epoch_ms > now_ms);
     }
     let bucket = guard.entry(fallback_key).or_insert(LocalRateLimitBucket {
-        window_start_epoch_secs: now_secs,
-        count: 0,
+        tat_epoch_ms: now_ms,
     });
-    if now_secs.saturating_sub(bucket.window_start_epoch_secs) >= window_secs {
-        bucket.window_start_epoch_secs = now_secs;
-        bucket.count = 0;
+    let decision = compute_gcra_fallback_decision(now_ms, bucket.tat_epoch_ms, limit, window_secs);
+    if decision.allowed {
+        bucket.tat_epoch_ms = decision.next_tat_epoch_ms;
     }
-    bucket.count = bucket.count.saturating_add(1);
-    let allowed = bucket.count <= limit;
-    let remaining = limit.saturating_sub(bucket.count);
-    let reset_at_epoch_secs = bucket.window_start_epoch_secs.saturating_add(window_secs);
     RateLimitDecision {
-        allowed,
+        allowed: decision.allowed,
         limit,
-        remaining,
-        reset_at_epoch_secs,
+        remaining: decision.remaining,
+        reset_at_epoch_secs: decision.reset_at_epoch_secs,
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LocalGcraDecision {
+    allowed: bool,
+    remaining: u64,
+    reset_at_epoch_secs: u64,
+    next_tat_epoch_ms: u64,
+}
+
+fn compute_gcra_fallback_decision(
+    now_ms: u64,
+    stored_tat_epoch_ms: u64,
+    limit: u64,
+    window_secs: u64,
+) -> LocalGcraDecision {
+    if limit == 0 || window_secs == 0 {
+        return LocalGcraDecision {
+            allowed: true,
+            remaining: limit,
+            reset_at_epoch_secs: epoch_ms_to_epoch_secs_ceil(now_ms),
+            next_tat_epoch_ms: now_ms,
+        };
+    }
+
+    let window_ms = window_secs.saturating_mul(1_000);
+    let emission_interval_ms = ceil_div(window_ms, limit).max(1);
+    let burst_tolerance_ms = emission_interval_ms.saturating_mul(limit.saturating_sub(1));
+    let tat_epoch_ms = stored_tat_epoch_ms.max(now_ms);
+    let allow_at_epoch_ms = tat_epoch_ms.saturating_sub(burst_tolerance_ms);
+
+    if now_ms < allow_at_epoch_ms {
+        return LocalGcraDecision {
+            allowed: false,
+            remaining: 0,
+            reset_at_epoch_secs: epoch_ms_to_epoch_secs_ceil(allow_at_epoch_ms),
+            next_tat_epoch_ms: stored_tat_epoch_ms,
+        };
+    }
+
+    let next_tat_epoch_ms = tat_epoch_ms.saturating_add(emission_interval_ms);
+    let consumed_ahead_ms = next_tat_epoch_ms.saturating_sub(now_ms);
+    let remaining = if burst_tolerance_ms >= consumed_ahead_ms {
+        let immediate_budget_ms = burst_tolerance_ms.saturating_sub(consumed_ahead_ms);
+        (immediate_budget_ms / emission_interval_ms)
+            .saturating_add(1)
+            .min(limit)
+    } else {
+        0
+    };
+    let reset_at_epoch_ms = next_tat_epoch_ms
+        .saturating_sub(burst_tolerance_ms)
+        .max(now_ms);
+
+    LocalGcraDecision {
+        allowed: true,
+        remaining,
+        reset_at_epoch_secs: epoch_ms_to_epoch_secs_ceil(reset_at_epoch_ms),
+        next_tat_epoch_ms,
+    }
+}
+
+fn ceil_div(numerator: u64, denominator: u64) -> u64 {
+    if denominator == 0 {
+        return numerator;
+    }
+    numerator.saturating_add(denominator.saturating_sub(1)) / denominator
+}
+
+fn epoch_ms_to_epoch_secs_ceil(epoch_ms: u64) -> u64 {
+    epoch_ms.saturating_add(999) / 1_000
 }
 
 pub(crate) fn build_rate_limit_headers(
@@ -344,6 +409,89 @@ impl SimpleIpv4Cidr {
 mod tests {
     use super::*;
     use axum::http::HeaderValue;
+
+    #[test]
+    fn gcra_fallback_should_allow_configured_burst_then_reject() {
+        let now_ms = 1_000_000;
+        let limit = 3;
+        let window_secs = 3;
+
+        let first = compute_gcra_fallback_decision(now_ms, now_ms, limit, window_secs);
+        assert_eq!(
+            first,
+            LocalGcraDecision {
+                allowed: true,
+                remaining: 2,
+                reset_at_epoch_secs: 1_000,
+                next_tat_epoch_ms: 1_001_000,
+            }
+        );
+
+        let second =
+            compute_gcra_fallback_decision(now_ms, first.next_tat_epoch_ms, limit, window_secs);
+        assert_eq!(
+            second,
+            LocalGcraDecision {
+                allowed: true,
+                remaining: 1,
+                reset_at_epoch_secs: 1_000,
+                next_tat_epoch_ms: 1_002_000,
+            }
+        );
+
+        let third =
+            compute_gcra_fallback_decision(now_ms, second.next_tat_epoch_ms, limit, window_secs);
+        assert_eq!(
+            third,
+            LocalGcraDecision {
+                allowed: true,
+                remaining: 0,
+                reset_at_epoch_secs: 1_001,
+                next_tat_epoch_ms: 1_003_000,
+            }
+        );
+
+        let fourth =
+            compute_gcra_fallback_decision(now_ms, third.next_tat_epoch_ms, limit, window_secs);
+        assert_eq!(
+            fourth,
+            LocalGcraDecision {
+                allowed: false,
+                remaining: 0,
+                reset_at_epoch_secs: 1_001,
+                next_tat_epoch_ms: 1_003_000,
+            }
+        );
+    }
+
+    #[test]
+    fn gcra_fallback_should_recover_after_emission_interval() {
+        let now_ms = 1_000_000;
+        let limit = 3;
+        let window_secs = 3;
+        let saturated_tat_ms = 1_003_000;
+
+        let ret =
+            compute_gcra_fallback_decision(now_ms + 1_000, saturated_tat_ms, limit, window_secs);
+
+        assert_eq!(
+            ret,
+            LocalGcraDecision {
+                allowed: true,
+                remaining: 0,
+                reset_at_epoch_secs: 1_002,
+                next_tat_epoch_ms: 1_004_000,
+            }
+        );
+    }
+
+    #[test]
+    fn ceil_div_should_round_up() {
+        assert_eq!(ceil_div(0, 3), 0);
+        assert_eq!(ceil_div(1, 3), 1);
+        assert_eq!(ceil_div(3, 3), 1);
+        assert_eq!(ceil_div(4, 3), 2);
+    }
 
     #[test]
     fn request_rate_limit_ip_key_with_user_fallback_should_prefer_forwarded_ip_when_proxy_id_trusted(
